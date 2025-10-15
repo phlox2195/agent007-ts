@@ -93,3 +93,4 @@ export const runWorkflow = async (workflow: WorkflowInput) => {
     output_text: agent007ResultTemp.finalOutput ?? ""
   };
 }
+export default agent007;
