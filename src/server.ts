@@ -4,56 +4,35 @@ import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import { Runner } from '@openai/agents';
 
-interface FileItem {
-  name: string;
-  url: string;
-}
-interface RunRequestBody {
-  chat_id?: string | number;
-  text?: string;
-  files?: FileItem[];
-}
-
 let agent: any;
 let runner: Runner | null = null;
+let client: OpenAI | null = null;
 
 async function loadAgent() {
   try {
-    const mod = await import('./agent/exported-agent.js'); // после сборки будет .js
+    const mod = await import('./agent/exported-agent.js'); // после сборки .ts -> .js
     agent = (mod as any).default ?? (mod as any);
-    // Если это экспорт из Agent Builder (Agent), нужен Runner
-    if (!agent?.run) {
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      runner = new Runner({ client });
-      console.log('[agent] Loaded Agent (SDK) + Runner.');
-    } else {
-      console.log('[agent] Loaded fallback-like agent with .run().');
-    }
+
+    // Экспорт из Agent Builder -> это Agent (без .run)
+    // Для него используем Runner
+    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    runner = new Runner(); // ⬅️ без аргументов
+    console.log('[agent] Loaded Agent (SDK) + Runner');
   } catch {
-    // Фолбэк-агент имеет .run()
+    // Фолбэк-агент имеет собственный .run()
     const mod = await import('./agent/fallback-agent.js');
     agent = (mod as any).default ?? (mod as any);
     runner = null;
-    console.warn('[agent] Using fallback agent.');
+    client = null;
+    console.warn('[agent] Using fallback agent');
   }
 }
 await loadAgent();
 
-
 const app = express();
 app.use(bodyParser.json({ limit: '20mb' }));
 
-function normalizeInput(text?: string, files?: FileItem[]) {
-  const msgs: any[] = [];
-  if (text?.trim()) msgs.push({ role: 'user', content: text });
-  if (files?.length) {
-    msgs.push({
-      role: 'user',
-      content: 'Файлы от пользователя:\n' + files.map(f => `- ${f.name}: ${f.url}`).join('\n')
-    });
-  }
-  return msgs;
-}
+app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
 app.post('/run', async (req: Request, res: Response) => {
   try {
@@ -70,8 +49,9 @@ app.post('/run', async (req: Request, res: Response) => {
 
     const options = { input, conversation_id: String(chat_id ?? 'no-chat') };
 
+    // 🔧 Главное изменение: вызываем Runner с 2–3 аргументами
     const result = runner
-      ? await runner.run({ agent, ...options })
+      ? await runner.run(agent, options, client ? { client } : undefined)
       : await agent.run(options);
 
     const answer =
@@ -86,8 +66,5 @@ app.post('/run', async (req: Request, res: Response) => {
   }
 });
 
-
-app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
-
-const port = process.env.PORT || 3000;
+const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => console.log(`Agent service listening on :${port}`));
