@@ -1,4 +1,4 @@
-import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, AgentInputItem, Runner } from "@openai/agents";
+import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, type AgentInputItem, Runner } from "@openai/agents";
 
 
 // Tool definitions
