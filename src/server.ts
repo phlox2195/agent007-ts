@@ -8,7 +8,7 @@ type FileItem = { name: string; url: string };
 type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
 
 let agent: any;
-let runner: Runner | null = null;
+let runner: any = null; // relax typing to avoid SDK overload mismatches
 let client: OpenAI | null = null;
 
 async function loadAgent() {
@@ -18,7 +18,7 @@ async function loadAgent() {
 
     // Экспорт из Agent Builder -> это Agent (без .run) — используем Runner
     client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    runner = new Runner(); // без аргументов, клиент передаём в run(...)
+    runner = new Runner(); // клиент прокинем в run(...)
     console.log('[agent] Loaded Agent (SDK) + Runner');
   } catch {
     // Фолбэк-агент имеет собственный .run()
@@ -34,7 +34,6 @@ await loadAgent();
 const app = express();
 app.use(bodyParser.json({ limit: '20mb' }));
 
-// необязательная защита: требуем application/json
 app.use((req, res, next) => {
   if (!req.is('application/json')) {
     return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
@@ -61,17 +60,19 @@ app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
       });
     }
 
-    const inputMsgs = input; // string | AgentInputItem[]
+    const inputMsgs = input;
     const conversation_id = String(chat_id ?? 'no-chat');
 
-    // для Agent SDK используем Runner.run(agent, input, options)
-    // options: { client?, config: { conversation_id } }
+    // Чтобы не спорить с типами SDK, явно кастуем options к any.
+    // В большинстве версий SDK работает { client, conversation_id } или { client, config: { conversation_id } }.
+    const runOptions: any = {};
+    if (client) runOptions.client = client;
+    // оба варианта — на случай различий версий SDK:
+    runOptions.conversation_id = conversation_id;
+    runOptions.config = { conversation_id };
+
     const result = runner
-      ? await runner.run(agent, inputMsgs, {
-          ...(client ? { client } : {}),
-          config: { conversation_id }
-        })
-      // для fallback-агента используется его собственный .run({ input, conversation_id })
+      ? await (runner as any).run(agent, inputMsgs, runOptions)
       : await agent.run({ input: inputMsgs, conversation_id });
 
     const answer =
