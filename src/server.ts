@@ -34,7 +34,7 @@ app.use(bodyParser.json({ limit: '20mb' }));
 
 app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
-app.post('/run', async (req: Request, res: Response) => {
+app.post('/run', async (req, res) => {
   try {
     const { chat_id, text, files } = req.body || {};
 
@@ -47,12 +47,15 @@ app.post('/run', async (req: Request, res: Response) => {
       });
     }
 
-    const options = { input, conversation_id: String(chat_id ?? 'no-chat') };
+    const inputMsgs = input;
+    const opts = {
+      conversation_id: String(chat_id ?? 'no-chat'),
+      ...(client ? { client } : {})
+    };
 
-    // 🔧 Главное изменение: вызываем Runner с 2–3 аргументами
     const result = runner
-      ? await runner.run(agent, options, client ? { client } : undefined)
-      : await agent.run(options);
+      ? await runner.run(agent, inputMsgs, opts)
+      : await agent.run({ input: inputMsgs, conversation_id: opts.conversation_id });
 
     const answer =
       result?.output_text ||
@@ -65,6 +68,7 @@ app.post('/run', async (req: Request, res: Response) => {
     return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
   }
 });
+
 
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => console.log(`Agent service listening on :${port}`));
