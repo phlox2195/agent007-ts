@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
+import OpenAI from 'openai';
+import { Runner } from '@openai/agents';
 
 interface FileItem {
   name: string;
@@ -13,20 +15,30 @@ interface RunRequestBody {
 }
 
 let agent: any;
+let runner: Runner | null = null;
 
 async function loadAgent() {
   try {
-    const mod = await import("./agent/exported-agent.js"); // после сборки будет .js
+    const mod = await import('./agent/exported-agent.js'); // после сборки будет .js
     agent = (mod as any).default ?? (mod as any);
-    console.log("[agent] Loaded Agent Builder export.");
+    // Если это экспорт из Agent Builder (Agent), нужен Runner
+    if (!agent?.run) {
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      runner = new Runner({ client });
+      console.log('[agent] Loaded Agent (SDK) + Runner.');
+    } else {
+      console.log('[agent] Loaded fallback-like agent with .run().');
+    }
   } catch {
-    const mod = await import("./agent/fallback-agent.js");
+    // Фолбэк-агент имеет .run()
+    const mod = await import('./agent/fallback-agent.js');
     agent = (mod as any).default ?? (mod as any);
-    console.warn("[agent] Using fallback agent.");
+    runner = null;
+    console.warn('[agent] Using fallback agent.');
   }
 }
-
 await loadAgent();
+
 
 const app = express();
 app.use(bodyParser.json({ limit: '20mb' }));
@@ -45,22 +57,35 @@ function normalizeInput(text?: string, files?: FileItem[]) {
 
 app.post('/run', async (req: Request, res: Response) => {
   try {
-    const { chat_id, text, files } = req.body as RunRequestBody;
-    const input = normalizeInput(text, files);
-    const result = await agent.run({
-      input,
-      conversation_id: String(chat_id ?? 'no-chat')
-    });
+    const { chat_id, text, files } = req.body || {};
+
+    const input: any[] = [];
+    if (text?.trim()) input.push({ role: 'user', content: text });
+    if (files?.length) {
+      input.push({
+        role: 'user',
+        content: 'Файлы:\n' + files.map((f: any) => `- ${f.name}: ${f.url}`).join('\n')
+      });
+    }
+
+    const options = { input, conversation_id: String(chat_id ?? 'no-chat') };
+
+    const result = runner
+      ? await runner.run({ agent, ...options })
+      : await agent.run(options);
+
     const answer =
       result?.output_text ||
       result?.content?.[0]?.text ||
       (typeof result === 'string' ? result : JSON.stringify(result));
-    res.json({ ok: true, answer });
+
+    return res.json({ ok: true, answer });
   } catch (err: any) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
+    console.error('[/run] ERROR', err?.message, err?.stack);
+    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
   }
 });
+
 
 app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
