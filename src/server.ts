@@ -16,13 +16,13 @@ let agent: any;
 
 async function loadAgent() {
   try {
-    const mod = await import('./agent/exported-agent.js');
-    agent = mod.default;
-    console.log('[agent] Loaded Agent Builder export.');
+    const mod = await import("./agent/exported-agent.js"); // после сборки будет .js
+    agent = (mod as any).default ?? (mod as any);
+    console.log("[agent] Loaded Agent Builder export.");
   } catch {
-    console.warn('[agent] No exported agent found, using fallback-agent.');
-    const mod = await import('./agent/fallback-agent.js');
-    agent = mod.default;
+    const mod = await import("./agent/fallback-agent.js");
+    agent = (mod as any).default ?? (mod as any);
+    console.warn("[agent] Using fallback agent.");
   }
 }
 
