@@ -2,26 +2,49 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
-import { Runner } from '@openai/agents';
+import { Runner, Agent } from '@openai/agents';
 
 type FileItem = { name: string; url: string };
 type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
 
 let agent: any;
-let runner: any = null; // relax typing to avoid SDK overload mismatches
+let runner: any = null; // keep as any to avoid SDK overload issues across versions
 let client: OpenAI | null = null;
 
 async function loadAgent() {
   try {
-    const mod = await import('./agent/exported-agent.js'); // после сборки .ts -> .js
-    agent = (mod as any).default ?? (mod as any);
+    const mod = await import('./agent/exported-agent.js'); // after build .ts -> .js
+    let exported = (mod as any).default ?? (mod as any);
 
-    // Экспорт из Agent Builder -> это Agent (без .run) — используем Runner
+    // If export is a factory, call it to get an Agent/definition
+    if (typeof exported === 'function') {
+      exported = await exported();
+    }
+
+    // Ensure we have an Agent instance; if it's a definition, wrap it
+    const isAgentInstance =
+      exported instanceof Agent ||
+      (exported && typeof (exported as any).getEnabledHandoffs === 'function');
+
+    if (!isAgentInstance) {
+      try {
+        exported = new (Agent as any)(exported);
+      } catch {
+        if (typeof (Agent as any).fromDefinition === 'function') {
+          exported = (Agent as any).fromDefinition(exported);
+        } else {
+          throw new Error('Exported module is not an Agent and cannot be wrapped.');
+        }
+      }
+    }
+
+    agent = exported as Agent;
+
     client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    runner = new Runner(); // клиент прокинем в run(...)
+    runner = new Runner(); // pass client in run(...)
     console.log('[agent] Loaded Agent (SDK) + Runner');
-  } catch {
-    // Фолбэк-агент имеет собственный .run()
+  } catch (e: any) {
+    console.warn('[agent] Fallback path:', e?.message);
     const mod = await import('./agent/fallback-agent.js');
     agent = (mod as any).default ?? (mod as any);
     runner = null;
@@ -34,6 +57,7 @@ await loadAgent();
 const app = express();
 app.use(bodyParser.json({ limit: '20mb' }));
 
+// Enforce JSON to avoid body parse surprises from Make/Telegram
 app.use((req, res, next) => {
   if (!req.is('application/json')) {
     return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
@@ -51,29 +75,24 @@ app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
       return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
     }
 
-    const input: any[] = [];
-    if (text?.trim()) input.push({ role: 'user', content: text });
+    // Collapse input to a single user text for maximum compatibility
+    const parts: string[] = [];
+    if (text?.trim()) parts.push(text.trim());
     if (files?.length) {
-      input.push({
-        role: 'user',
-        content: 'Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n')
-      });
+      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
     }
+    const userText = parts.join('\n\n');
 
-    const inputMsgs = input;
     const conversation_id = String(chat_id ?? 'no-chat');
 
-    // Чтобы не спорить с типами SDK, явно кастуем options к any.
-    // В большинстве версий SDK работает { client, conversation_id } или { client, config: { conversation_id } }.
-    const runOptions: any = {};
-    if (client) runOptions.client = client;
-    // оба варианта — на случай различий версий SDK:
-    runOptions.conversation_id = conversation_id;
-    runOptions.config = { conversation_id };
-
     const result = runner
-      ? await (runner as any).run(agent, inputMsgs, runOptions)
-      : await agent.run({ input: inputMsgs, conversation_id });
+      ? await (runner as any).run(agent, userText, {
+          ...(client ? { client } : {}),
+          // support both modern and older SDK shapes
+          conversation_id,
+          config: { conversation_id }
+        } as any)
+      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
 
     const answer =
       (result as any)?.output_text ||
