@@ -108,3 +108,55 @@ app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
 
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => console.log(`Agent service listening on :${port}`));
+
+
+const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; error?: string }>();
+
+function newJobId() {
+  return Math.random().toString(36).slice(2);
+}
+
+app.post('/run_async', async (req, res) => {
+  const { chat_id, text, files } = req.body || {};
+  const parts: string[] = [];
+  if (text?.trim()) parts.push(text.trim());
+  if (files?.length) {
+    parts.push('Файлы:\n' + files.map((f:any) => `- ${f.name}: ${f.url}`).join('\n'));
+  }
+  const userText = parts.join('\n\n');
+  const conversation_id = String(chat_id ?? 'no-chat');
+
+  const job_id = newJobId();
+  jobs.set(job_id, { status: 'pending' });
+
+  // фоном
+  (async () => {
+    try {
+      const result = runner
+        ? await (runner as any).run(agent, userText, {
+            ...(client ? { client } : {}),
+            conversation_id,
+            config: { conversation_id }
+          } as any)
+        : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
+
+      const answer =
+        (result as any)?.output_text ||
+        (result as any)?.content?.[0]?.text ||
+        (typeof result === 'string' ? result : JSON.stringify(result));
+
+      jobs.set(job_id, { status: 'done', result: { answer } });
+    } catch (err:any) {
+      jobs.set(job_id, { status: 'error', error: err?.message || 'Agent error' });
+    }
+  })();
+
+  res.json({ ok: true, job_id });
+});
+
+app.get('/result', (req, res) => {
+  const job_id = String(req.query.job_id || '');
+  const job = jobs.get(job_id);
+  if (!job) return res.status(404).json({ ok: false, error: 'job not found' });
+  res.json({ ok: true, ...job });
+});
