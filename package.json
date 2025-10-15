@@ -10,11 +10,12 @@
   },
   "engines": { "node": ">=18" },
   "dependencies": {
-    "@openai/agents": "^0.1.9",
+    "@openai/agents": "latest",
+    "@openai/agents-core": "^latest",
+    "openai": "latest",
     "body-parser": "^1.20.2",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "openai": "^4.60.0"
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
