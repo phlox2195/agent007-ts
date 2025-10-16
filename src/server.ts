@@ -67,6 +67,70 @@ app.use((req, res, next) => {
 
 app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
+function extractText(raw: any): string {
+  // Если пришла строка, попробуем понять: это «обычный текст» или сериализованный JSON
+  let result: any = raw;
+  if (typeof raw === 'string') {
+    // Быстрый хак: если выглядит как JSON со state — парсим
+    const looksLikeState = raw.startsWith('{"state"') || raw.includes('"state":{');
+    if (looksLikeState) {
+      try { result = JSON.parse(raw); } catch { /* оставим как есть */ }
+    } else {
+      return raw.trim();
+    }
+  }
+
+  if (!result) return '';
+
+  // 1) Самый частый случай
+  if (typeof result.output_text === 'string' && result.output_text.trim()) {
+    return result.output_text.trim();
+  }
+
+  // 2) Универсальный извлекатель из content[]
+  const fromContent = (obj: any): string => {
+    const arr = obj?.content;
+    if (Array.isArray(arr)) {
+      const txt = arr
+        .map((c: any) => c?.text ?? c?.output_text ?? '')
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (txt) return txt;
+    }
+    return '';
+  };
+
+  // 3) Популярные места у разных версий SDK
+  const c1 = fromContent(result);
+  if (c1) return c1;
+
+  const fo = result?.final_output ?? result?.state?.final_output;
+  const c2 = fromContent(fo ?? {});
+  if (c2) return c2;
+
+  const curr = result?.currentAgentOutput ?? result?.state?.currentAgentOutput;
+  const c3 = fromContent(curr ?? {});
+  if (c3) return c3;
+
+  const mr = result?.modelResponses ?? result?.state?.modelResponses;
+  if (Array.isArray(mr)) {
+    for (let i = mr.length - 1; i >= 0; i--) {
+      const t = mr[i]?.output_text || fromContent(mr[i]);
+      if (t) return t;
+    }
+  }
+
+  // 4) На крайний случай — аккуратно вернуть текст, а не «простыню»
+  try {
+    return JSON.stringify(result, null, 2).slice(0, 3500);
+  } catch {
+    return String(result).slice(0, 3500);
+  }
+}
+
+
+
 app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
     const { chat_id, text, files } = req.body || {};
@@ -94,10 +158,7 @@ app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
         } as any)
       : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
 
-    const answer =
-      (result as any)?.output_text ||
-      (result as any)?.content?.[0]?.text ||
-      (typeof result === 'string' ? result : JSON.stringify(result));
+    const answer = extractText(result);
 
     return res.json({ ok: true, answer });
   } catch (err: any) {
@@ -115,51 +176,6 @@ const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; e
 function newJobId() {
   return Math.random().toString(36).slice(2);
 }
-
-function extractText(result: any): string {
-  if (!result) return '';
-
-  if (typeof result.output_text === 'string' && result.output_text.trim()) {
-    return result.output_text.trim();
-  }
-
-  const tryFromContentArr = (obj: any) => {
-    const arr = obj?.content;
-    if (Array.isArray(arr)) {
-      const txt = arr
-        .map((c: any) => c?.text ?? c?.output_text)
-        .filter(Boolean)
-        .join('\n')
-        .trim();
-      if (txt) return txt;
-    }
-    return '';
-  };
-  const c1 = tryFromContentArr(result);
-  if (c1) return c1;
-
-  const fo = result?.state?.final_output;
-  const c2 = tryFromContentArr(fo);
-  if (c2) return c2;
-
-  const c3 = tryFromContentArr(result?.state?.currentAgentOutput ?? {});
-  if (c3) return c3;
-
-  const mr = result?.state?.modelResponses;
-  if (Array.isArray(mr)) {
-    for (let i = mr.length - 1; i >= 0; i--) {
-      const t = mr[i]?.output_text || tryFromContentArr(mr[i]);
-      if (t) return t;
-    }
-  }
-
-  try {
-    return JSON.stringify(result, null, 2).slice(0, 3500);
-  } catch {
-    return String(result);
-  }
-}
-
 
 app.post('/run_async', async (req, res) => {
   const { chat_id, text, files } = req.body || {};
@@ -185,7 +201,10 @@ app.post('/run_async', async (req, res) => {
           } as any)
         : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
 
-     const answer = extractText(result);
+     const answer =
+        (result as any)?.output_text ||
+        (result as any)?.content?.[0]?.text ||
+        (typeof result === 'string' ? result : JSON.stringify(result));
 
       jobs.set(job_id, { status: 'done', result: { answer } });
     } catch (err:any) {
