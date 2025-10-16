@@ -116,6 +116,51 @@ function newJobId() {
   return Math.random().toString(36).slice(2);
 }
 
+function extractText(result: any): string {
+  if (!result) return '';
+
+  if (typeof result.output_text === 'string' && result.output_text.trim()) {
+    return result.output_text.trim();
+  }
+
+  const tryFromContentArr = (obj: any) => {
+    const arr = obj?.content;
+    if (Array.isArray(arr)) {
+      const txt = arr
+        .map((c: any) => c?.text ?? c?.output_text)
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (txt) return txt;
+    }
+    return '';
+  };
+  const c1 = tryFromContentArr(result);
+  if (c1) return c1;
+
+  const fo = result?.state?.final_output;
+  const c2 = tryFromContentArr(fo);
+  if (c2) return c2;
+
+  const c3 = tryFromContentArr(result?.state?.currentAgentOutput ?? {});
+  if (c3) return c3;
+
+  const mr = result?.state?.modelResponses;
+  if (Array.isArray(mr)) {
+    for (let i = mr.length - 1; i >= 0; i--) {
+      const t = mr[i]?.output_text || tryFromContentArr(mr[i]);
+      if (t) return t;
+    }
+  }
+
+  try {
+    return JSON.stringify(result, null, 2).slice(0, 3500);
+  } catch {
+    return String(result);
+  }
+}
+
+
 app.post('/run_async', async (req, res) => {
   const { chat_id, text, files } = req.body || {};
   const parts: string[] = [];
@@ -140,10 +185,7 @@ app.post('/run_async', async (req, res) => {
           } as any)
         : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
 
-      const answer =
-        (result as any)?.output_text ||
-        (result as any)?.content?.[0]?.text ||
-        (typeof result === 'string' ? result : JSON.stringify(result));
+     const answer = extractText(result);
 
       jobs.set(job_id, { status: 'done', result: { answer } });
     } catch (err:any) {
