@@ -201,11 +201,8 @@ app.post('/run_async', async (req, res) => {
           } as any)
         : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
 
-     const answer =
-        (result as any)?.output_text ||
-        (result as any)?.content?.[0]?.text ||
-        (typeof result === 'string' ? result : JSON.stringify(result));
-
+     const answer = extractText(result);
+      
       jobs.set(job_id, { status: 'done', result: { answer } });
     } catch (err:any) {
       jobs.set(job_id, { status: 'error', error: err?.message || 'Agent error' });
