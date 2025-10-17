@@ -1,140 +1,187 @@
-// server.ts — минимальный синхронный сервер только с /run
-import express, { Request, Response } from "express";
-import cors from "cors";
-import bodyParser from "body-parser";
+import 'dotenv/config';
+import express, { Request, Response } from 'express';
+import bodyParser from 'body-parser';
+import OpenAI from 'openai';
+import { Runner, Agent } from '@openai/agents';
 
-// ===== Настройки окружения =====
-const PORT = process.env.PORT ? Number(process.env.PORT) : 10000;
-const AGENT_ID = process.env.AGENT_ID || process.env.OPENAI_AGENT_ID || "";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || ""; // опционально (если свой прокси)
+type FileItem = { name: string; url: string };
+type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
 
-// ===== Типы входа =====
-type FileRef = { name?: string; url: string };
-type RunBody = {
-  text?: string;
-  files?: FileRef[];
-  chat_id?: string | number; // прозрачно прокидывается, если нужно
-  meta?: Record<string, any>;
-};
+let agent: any;
+let runner: any = null; // keep as any to avoid SDK overload issues across versions
+let client: OpenAI | null = null;
 
-// ===== Глобальные синглтоны =====
-let runner: any /* Агент/Раннер из SDK */ = null;
+async function loadAgent() {
+  try {
+    const mod = await import('./agent/exported-agent.js'); // after build .ts -> .js
+    let exported = (mod as any).default ?? (mod as any);
 
-// ===== Вспомогалки =====
-function assertEnv() {
-  if (!AGENT_ID) throw new Error("AGENT_ID (или OPENAI_AGENT_ID) не задан");
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY не задан");
+    // If export is a factory, call it to get an Agent/definition
+    if (typeof exported === 'function') {
+      exported = await exported();
+    }
+
+    // Ensure we have an Agent instance; if it's a definition, wrap it
+    const isAgentInstance =
+      exported instanceof Agent ||
+      (exported && typeof (exported as any).getEnabledHandoffs === 'function');
+
+    if (!isAgentInstance) {
+      try {
+        exported = new (Agent as any)(exported);
+      } catch {
+        if (typeof (Agent as any).fromDefinition === 'function') {
+          exported = (Agent as any).fromDefinition(exported);
+        } else {
+          throw new Error('Exported module is not an Agent and cannot be wrapped.');
+        }
+      }
+    }
+
+    agent = exported as Agent;
+
+    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    runner = new Runner(); // pass client in run(...)
+    console.log('[agent] Loaded Agent (SDK) + Runner');
+  } catch (e: any) {
+    console.warn('[agent] Fallback path:', e?.message);
+    const mod = await import('./agent/fallback-agent.js');
+    agent = (mod as any).default ?? (mod as any);
+    runner = null;
+    client = null;
+    console.warn('[agent] Using fallback agent');
+  }
+}
+await loadAgent();
+
+const app = express();
+app.use(bodyParser.json({ limit: '20mb' }));
+
+// Enforce JSON to avoid body parse surprises from Make/Telegram
+app.use((req, res, next) => {
+  if (!req.is('application/json')) {
+    return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
+  }
+  next();
+});
+
+app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
+
+function extractText(raw: any): string {
+  // Если пришла строка, попробуем понять: это «обычный текст» или сериализованный JSON
+  let result: any = raw;
+  if (typeof raw === 'string') {
+    // Быстрый хак: если выглядит как JSON со state — парсим
+    const looksLikeState = raw.startsWith('{"state"') || raw.includes('"state":{');
+    if (looksLikeState) {
+      try { result = JSON.parse(raw); } catch { /* оставим как есть */ }
+    } else {
+      return raw.trim();
+    }
+  }
+
+  if (!result) return '';
+
+  // 1) Самый частый случай
+  if (typeof result.output_text === 'string' && result.output_text.trim()) {
+    return result.output_text.trim();
+  }
+
+  // 2) Универсальный извлекатель из content[]
+  const fromContent = (obj: any): string => {
+    const arr = obj?.content;
+    if (Array.isArray(arr)) {
+      const txt = arr
+        .map((c: any) => c?.text ?? c?.output_text ?? '')
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (txt) return txt;
+    }
+    return '';
+  };
+
+  // 3) Популярные места у разных версий SDK
+  const c1 = fromContent(result);
+  if (c1) return c1;
+
+  const fo = result?.final_output ?? result?.state?.final_output;
+  const c2 = fromContent(fo ?? {});
+  if (c2) return c2;
+
+  const curr = result?.currentAgentOutput ?? result?.state?.currentAgentOutput;
+  const c3 = fromContent(curr ?? {});
+  if (c3) return c3;
+
+  const mr = result?.modelResponses ?? result?.state?.modelResponses;
+  if (Array.isArray(mr)) {
+    for (let i = mr.length - 1; i >= 0; i--) {
+      const t = mr[i]?.output_text || fromContent(mr[i]);
+      if (t) return t;
+    }
+  }
+
+  // 4) На крайний случай — аккуратно вернуть текст, а не «простыню»
+  try {
+    return JSON.stringify(result, null, 2).slice(0, 3500);
+  } catch {
+    return String(result).slice(0, 3500);
+  }
 }
 
-async function ensureRunner() {
-  if (runner) return;
-
-  assertEnv();
-
-  // Инициализация клиента/раннера.
-  // Ниже оставлено максимально совместимо с большинством SDK.
-  // Если в твоём репо это по-другому, просто подставь свою функцию инициализации.
-  const { AgentsClient } = require("@openai/agents"); // в твоём репо уже есть
-  const client = new AgentsClient({
-    apiKey: OPENAI_API_KEY,
-    baseURL: OPENAI_BASE_URL || undefined,
-  });
-
-  const { AgentRunner } = require("@openai/agents/runner");
-  runner = new AgentRunner({
-    client,
-    agentId: AGENT_ID,
-  });
-
-  console.log("[agent] runner is ready for agent:", AGENT_ID);
-}
-
-// Достаём человекочитаемый текст из результата SDK
 function extractText(result: any): string {
   try {
     if (!result) return "Готово.";
 
-    // 1) Наиболее частые поля SDK
-    if (typeof result.output_text === "string" && result.output_text.trim())
+    if (typeof result?.output_text === "string" && result.output_text.trim())
       return result.output_text;
 
     const c0 = result?.content?.[0];
     if (typeof c0?.text === "string" && c0.text.trim()) return c0.text;
 
-    // 2) В некоторых реализациях есть final_output
     if (typeof result?.final_output === "string" && result.final_output.trim())
       return result.final_output;
 
-    // 3) Попробуем из последнего modelResponse/tool шага
-    const mr =
-      (Array.isArray(result?.modelResponses) &&
-        result.modelResponses[result.modelResponses.length - 1]) ||
-      null;
-    const mrText =
-      mr?.output_text || mr?.content?.[0]?.text || mr?.message?.content;
-    if (typeof mrText === "string" && mrText.trim()) return mrText;
+    const last = Array.isArray(result?.modelResponses)
+      ? result.modelResponses[result.modelResponses.length - 1]
+      : null;
+    const lastText =
+      last?.output_text || last?.content?.[0]?.text || last?.message?.content;
+    if (typeof lastText === "string" && lastText.trim()) return lastText;
 
-    // 4) Сам результат строкой
     if (typeof result === "string") return result;
-
     return "Готово.";
   } catch {
     return "Готово.";
   }
 }
 
-// ===== Приложение =====
-const app = express();
-app.use(cors());
-app.use(bodyParser.json({ limit: "10mb" }));
 
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
+app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
+  try {
+    await ensureRunner(); // поднимает agent/runner/клиент
+    const { text = '', files = [] } = req.body || {};
 
-// ---- ЕДИНСТВЕННАЯ рабочая точка: /run ----
-app.post(
-  "/run",
-  async (req: Request<{}, {}, RunBody>, res: Response): Promise<any> => {
-    try {
-      await ensureRunner();
+    const result = await runner.run({
+      input: text,
+      attachments: files?.map(f => ({ url: f.url, name: f.name })) ?? [],
+    });
 
-      const { text = "", files = [] } = req.body || {};
-
-      const attachments =
-        files?.map((f) => ({ url: f.url, name: f.name || undefined })) ?? [];
-
-      // Один вызов агента на запрос
-      const result = await runner.run({
-        input: text || "",
-        attachments,
-        // при желании: max_output_tokens: 1200, temperature: 0.7, и т.д.
-      });
-
-      const answer = extractText(result);
-      return res.json({ ok: true, answer });
-    } catch (err: any) {
-      console.error("[/run] error:", err);
-      return res
-        .status(500)
-        .json({ ok: false, error: err?.message || "Agent error" });
-    }
+    const answer = extractText(result); // главный момент!
+    return res.json({ ok: true, answer });
+  } catch (err:any) {
+    console.error('run error', err);
+    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
   }
-);
-
-// ---- Заглушки: полностью отключаем async-режим ----
-app.post("/run_async", (_req, res) => {
-  return res
-    .status(410)
-    .json({ ok: false, error: "run_async disabled; use /run" });
 });
 
-app.get("/result", (_req, res) => {
-  return res
-    .status(410)
-    .json({ ok: false, error: "result polling disabled; use /run" });
-});
 
-// ---- Старт ----
-app.listen(PORT, () =>
-  console.log(`Agent service listening on :${PORT} (sync /run only)`)
-);
+const port = Number(process.env.PORT) || 3000;
+app.listen(port, () => console.log(`Agent service listening on :${port}`));
+
+
+const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; error?: string }>();
+
+function newJobId() {
+  return Math.random().toString(36).slice(2);
+}
