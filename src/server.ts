@@ -131,18 +131,36 @@ function extractText(raw: any): string {
 
 app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
-    await ensureRunner(); // поднимает agent/runner/клиент
-    const { text = '', files = [] } = req.body || {};
+    const { chat_id, text, files } = req.body || {};
 
-    const result = await runner.run({
-      input: text,
-      attachments: files?.map(f => ({ url: f.url, name: f.name })) ?? [],
-    });
+    if (!text?.trim() && !(files?.length)) {
+      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
+    }
 
-    const answer = extractText(result); // главный момент!
+    // Collapse input to a single user text for maximum compatibility
+    const parts: string[] = [];
+    if (text?.trim()) parts.push(text.trim());
+    if (files?.length) {
+      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
+    }
+    const userText = parts.join('\n\n');
+
+    const conversation_id = String(chat_id ?? 'no-chat');
+
+    const result = runner
+      ? await (runner as any).run(agent, userText, {
+          ...(client ? { client } : {}),
+          // support both modern and older SDK shapes
+          conversation_id,
+          config: { conversation_id }
+        } as any)
+      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
+
+    const answer = extractText(result);
+
     return res.json({ ok: true, answer });
-  } catch (err:any) {
-    console.error('run error', err);
+  } catch (err: any) {
+    console.error('[/run] ERROR', err?.message, err?.stack);
     return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
   }
 });
