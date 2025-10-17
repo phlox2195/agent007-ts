@@ -129,34 +129,6 @@ function extractText(raw: any): string {
   }
 }
 
-function extractText(result: any): string {
-  try {
-    if (!result) return "Готово.";
-
-    if (typeof result?.output_text === "string" && result.output_text.trim())
-      return result.output_text;
-
-    const c0 = result?.content?.[0];
-    if (typeof c0?.text === "string" && c0.text.trim()) return c0.text;
-
-    if (typeof result?.final_output === "string" && result.final_output.trim())
-      return result.final_output;
-
-    const last = Array.isArray(result?.modelResponses)
-      ? result.modelResponses[result.modelResponses.length - 1]
-      : null;
-    const lastText =
-      last?.output_text || last?.content?.[0]?.text || last?.message?.content;
-    if (typeof lastText === "string" && lastText.trim()) return lastText;
-
-    if (typeof result === "string") return result;
-    return "Готово.";
-  } catch {
-    return "Готово.";
-  }
-}
-
-
 app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
     await ensureRunner(); // поднимает agent/runner/клиент
