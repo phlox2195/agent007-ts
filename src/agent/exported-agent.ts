@@ -68,7 +68,7 @@ const agent007 = new Agent({
   model: "gpt-5",
   tools: [
     fileSearch,
-    webSearchPreview,
+    webSearchTool,
     codeInterpreter
   ],
   modelSettings: {
