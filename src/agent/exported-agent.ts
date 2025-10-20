@@ -1,22 +1,19 @@
-import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, type AgentInputItem, Runner } from "@openai/agents";
+import {
+  Agent,
+  Runner,
+  codeInterpreterTool,
+  fileSearchTool,
+  webSearchTool,
+  type AgentInputItem,
+} from "@openai/agents";
 
-
-// Tool definitions
+// инструменты
+const codeInterpreter = codeInterpreterTool({ container: { type: "auto", file_ids: [] } });
 const fileSearch = fileSearchTool([
-  "vs_68efae111ac88191afdfcc16e623ab5f"
-])
-const webSearchPreview = webSearchTool({
-  searchContextSize: "medium",
-  userLocation: {
-    type: "approximate"
-  }
-})
-const codeInterpreter = codeInterpreterTool({
-  container: {
-    type: "auto",
-    file_ids: []
-  }
-})
+  "vs_68e4fb59f7808191a50f8ed137d75c78" // ваш id, при необходимости
+]);
+const webSearch = webSearchTool({ searchContextSize: "medium", userLocation: { type: "approximate" } });
+
 const agent007 = new Agent({
   name: "agent007",
   instructions: `Твоя роль — эксперт по справочно-правовой системе КонсультантПлюс, который помогает менеджерам по продажам анализировать потребности организаций в системе :: Твоя задача состоит в анализе pdf файла об организации :: После анализа необходимо предоставить персонализированные рекомендации по использованию системы КонсультантПлюс. :: Предлагай весь перечень возможных решений, ничего не упускай из внимания :: Пройдись по всем решениям и реши подходят они или нет.
@@ -82,27 +79,36 @@ const agent007 = new Agent({
   }
 });
 
-export async function runAgent(
-  client: OpenAI,
-  {
-    text,
-    file_ids = []
-  }: { text: string; file_ids?: string[] }
-): Promise<{ output_text: string }> {
-  const runner = new Runner({ client });
+export async function runAgent({
+  text,
+  file_ids = [],
+}: {
+  text: string;
+  file_ids?: string[];
+}): Promise<{ output_text: string }> {
+  const runner = new Runner(); // без { client }
 
-  const result = await runner.run(agent007, {
-    input: [
-      { role: "user", content: [{ type: "input_text", text }] }
-    ],
-    attachments: file_ids.map((id) => ({
-      file_id: id,
-      tools: [{ type: "code_interpreter" }]
-    }))
-  });
+  const input: AgentInputItem[] = [
+    { role: "user", content: [{ type: "input_text", text }] },
+  ];
 
-  // у новых версий есть result.output_text; делаем фолбэк на пустую строку
-  return { output_text: result.output_text ?? "" };
+  const attachments = file_ids.map((id) => ({
+    file_id: id,
+    tools: [{ type: "code_interpreter" }],
+  }));
+
+  // новая сигнатура: input вторым аргументом, options третьим
+  const result = await runner.run(agent007, input, { attachments });
+
+  const textOut =
+    (result as any).output_text ??
+    ((result as any).output?.map?.((c: any) =>
+      c?.content
+        ?.filter?.((p: any) => p?.type === "output_text")
+        ?.map?.((p: any) => p?.text)
+        ?.join("\n")
+    )?.join("\n") ?? "");
+
+  return { output_text: textOut };
 }
-
 export default agent007;
