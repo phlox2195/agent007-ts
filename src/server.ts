@@ -68,66 +68,55 @@ app.use((req, res, next) => {
 app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
 function extractText(raw: any): string {
-  // Если пришла строка, попробуем понять: это «обычный текст» или сериализованный JSON
-  let result: any = raw;
-  if (typeof raw === 'string') {
-    // Быстрый хак: если выглядит как JSON со state — парсим
-    const looksLikeState = raw.startsWith('{"state"') || raw.includes('"state":{');
-    if (looksLikeState) {
-      try { result = JSON.parse(raw); } catch { /* оставим как есть */ }
-    } else {
-      return raw.trim();
-    }
+  // 1) Если пришла строка — это может быть уже текст ИЛИ JSON со state
+  let r: any = raw;
+  if (typeof r === 'string') {
+    const looksLikeJson = r.trim().startsWith('{') && r.includes('"state"');
+    if (looksLikeJson) { try { r = JSON.parse(r); } catch { /* noop */ } else { return r.trim(); } }
+  }
+  if (!r) return '';
+
+  const pluck = (arr: any[] = []) =>
+    arr.map((c: any) => c?.text ?? c?.output_text ?? '').filter(Boolean).join('\n\n').trim();
+
+  // Старые/простые формы
+  if (typeof r.output_text === 'string' && r.output_text.trim()) return r.output_text.trim();
+  if (typeof r.finalOutput === 'string' && r.finalOutput.trim()) return r.finalOutput.trim();
+  if (Array.isArray(r.content)) { const t = pluck(r.content); if (t) return t; }
+
+  // Формы Runner/SDK через state
+  const s = r.state ?? r;
+
+  if (typeof s?.finalOutput === 'string' && s.finalOutput.trim()) return s.finalOutput.trim();
+
+  // newItems (могут лежать как массив структур с content/rawItem.content)
+  if (Array.isArray(s?.newItems)) {
+    const t = s.newItems
+      .flatMap((it: any) => it?.content ?? it?.rawItem?.content ?? [])
+      .map((c: any) => c?.text ?? c?.output_text ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (t) return t;
   }
 
-  if (!result) return '';
-
-  // 1) Самый частый случай
-  if (typeof result.output_text === 'string' && result.output_text.trim()) {
-    return result.output_text.trim();
+  // modelResponses[].content[].text
+  if (Array.isArray(s?.modelResponses)) {
+    const t = s.modelResponses
+      .flatMap((m: any) => m?.content ?? [])
+      .map((c: any) => c?.text ?? c?.output_text ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (t) return t;
   }
 
-  // 2) Универсальный извлекатель из content[]
-  const fromContent = (obj: any): string => {
-    const arr = obj?.content;
-    if (Array.isArray(arr)) {
-      const txt = arr
-        .map((c: any) => c?.text ?? c?.output_text ?? '')
-        .filter(Boolean)
-        .join('\n')
-        .trim();
-      if (txt) return txt;
-    }
-    return '';
-  };
-
-  // 3) Популярные места у разных версий SDK
-  const c1 = fromContent(result);
-  if (c1) return c1;
-
-  const fo = result?.final_output ?? result?.state?.final_output;
-  const c2 = fromContent(fo ?? {});
-  if (c2) return c2;
-
-  const curr = result?.currentAgentOutput ?? result?.state?.currentAgentOutput;
-  const c3 = fromContent(curr ?? {});
-  if (c3) return c3;
-
-  const mr = result?.modelResponses ?? result?.state?.modelResponses;
-  if (Array.isArray(mr)) {
-    for (let i = mr.length - 1; i >= 0; i--) {
-      const t = mr[i]?.output_text || fromContent(mr[i]);
-      if (t) return t;
-    }
-  }
-
-  // 4) На крайний случай — аккуратно вернуть текст, а не «простыню»
-  try {
-    return JSON.stringify(result, null, 2).slice(0, 3500);
-  } catch {
-    return String(result).slice(0, 3500);
-  }
+  // Последний шанс — возвращаем аккуратно усечённый JSON,
+  // чтобы в Telegram не улетала «простыня»
+  try { return JSON.stringify(r, null, 2).slice(0, 3500); }
+  catch { return String(r).slice(0, 3500); }
 }
+
 
 app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
