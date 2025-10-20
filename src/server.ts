@@ -1,6 +1,6 @@
 import { OpenAI } from "openai";
 import express from "express";
-import { runAgent } from "./exported-agent"; // <-- импортируем функцию
+import { runAgent } from "./exported-agent.ts"; // <-- импортируем функцию
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 const app = express();
