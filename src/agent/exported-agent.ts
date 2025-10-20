@@ -1,177 +1,126 @@
-import 'dotenv/config';
-import express, { Request, Response } from 'express';
-import bodyParser from 'body-parser';
-import OpenAI from 'openai';
-import { Runner, Agent } from '@openai/agents';
+import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, type AgentInputItem, Runner } from "@openai/agents";
 
-type FileItem = { name: string; url: string };
-type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
 
-let agent: any;
-let runner: any = null; // keep as any to avoid SDK overload issues across versions
-let client: OpenAI | null = null;
+// Tool definitions
+const fileSearch = fileSearchTool([
+  "vs_68efae111ac88191afdfcc16e623ab5f"
+])
+const webSearchPreview = webSearchTool({
+  searchContextSize: "medium",
+  userLocation: {
+    type: "approximate"
+  }
+})
+const codeInterpreter = codeInterpreterTool({
+  container: {
+    type: "auto",
+    file_ids: []
+  }
+})
+const agent007 = new Agent({
+  name: "agent007",
+  instructions: `Твоя роль — эксперт по справочно-правовой системе КонсультантПлюс, который помогает менеджерам по продажам анализировать потребности организаций в системе :: Твоя задача состоит в анализе pdf файла об организации :: После анализа необходимо предоставить персонализированные рекомендации по использованию системы КонсультантПлюс. :: Предлагай весь перечень возможных решений, ничего не упускай из внимания :: Пройдись по всем решениям и реши подходят они или нет.
 
-async function loadAgent() {
-  try {
-    const mod = await import('./agent/exported-agent.js'); // after build .ts -> .js
-    let exported = (mod as any).default ?? (mod as any);
+Рекомендации должны быть: Конкретными, учитывающими специфику деятельности организации. :: Важно, в ответах опирайся только на текущую деятельность (даже если компания может, но не занимается этим на данный момент, всё равно не упоминай) :: Названия для рекомендаций бери из ключа name в json файлах. :: Важно, Не пиши о том чего нет в json файле :: Если ничего не подходит, то пиши что рекомендаций нет и ничего не предлагай. :: Не предлагай тех решений которых нет в "листовки.json"  и "дополнительное-описание-пн.json" файле :: если тебя в одном чате попросят проанализировать несколько компаний, то анализируй их отдельно, не опираясь на предыдущую часть диалога :: Предлагай решения в порядке: сначала "Поиск эффективного решения", затем "Проактивная защита", в конце "Узкие взаимодействия" :: Если для какого-то кластера нет подходящего решения пиши "нет решений" и переходи к следующему :: Информацию бери из ключа "Cluster" файла "таблица-по-ПН.json" будь внимателен, от этого зависит порядок рекомендаций :: не путай кластеры используй строго указанную кластеризацию, не относи самостоятельно решение в другой кластер :: Для каждого кластера предложи 3 и более решения. :: При рекомендации опирайся на "Рекомендуемые связки" из таблицы "Детализированные_связки_платных_новшеств1.xlsx" и рекомендации по режимам из файла "УСИЛЕНИЯ КОМПЛЕКТОВ1.json" :: перейди на сайт и проанализируй участие организации из файла в тендерах за последние 5 лет и в рамках какого закона (44фз или 223фз) проводились закупки, опираясь на ответ дай рекомендации либо Готовое Решение Проф 44ФЗ или Готовое Решение Проф 223ФЗ или оба, если имеются закупки и по 44фз и по 223фз https://zakupki.gov.ru/  :: Рекомендуй Готовые решения (Проф). Налог на добавленную стоимость организациям на ОСНО а также УСН с оборотом больше 60 млн. в год. :: Если в организации числится до 5 сотрудников и оборот компании на УСН не больше 10 млн. не предлагай решения из первого кластера (Поиск Эффективного решения) пиши "нет решений" и переходи к предложению решений из следующего кластера :: Если численность до 5 сотрудников не предлагай решения для кадровика, а также Готовые решения (Проф) — Зарплатные налоги :: Для компаний с численностью больше 5 сотрудников предлагай решения для каждой целевой аудитории. Для каждой целевой аудитории делай подраздел где перечисляй решений из 3 кластеров  ::  
 
-    // If export is a factory, call it to get an Agent/definition
-    if (typeof exported === 'function') {
-      exported = await exported();
-    }
+Структура ответа должна быть следующая:
+Краткий анализ компании
+Грядущие вызовы 2026 года и рекомендации по платным новшествам, как ответ на вызов для организации :: описывай подробно грядущий вызов (более 1000 знаков) :: "основные-вызовы-2026.json" и "вебинар-индексации.json")
 
-    // Ensure we have an Agent instance; if it's a definition, wrap it
-    const isAgentInstance =
-      exported instanceof Agent ||
-      (exported && typeof (exported as any).getEnabledHandoffs === 'function');
+"Три причины почему К+ нужен в организации:
+1. Поиск нешаблонных решений, основанных на реальном опыте работы компаний и взаимодействии с проверяющими.
+Накопление базы индивидуальных разъяснений контролирующих органов:
+- Постоянное взаимодействие с госорганами власти позволяет собирать серьёзные банки с частными разъяснениями для компаний нашей страны;
+- Эти пояснения ценны и сами по себе – поясняется огромное количество нюансов разных ситуаций;
+- Еще больше они ценны в качестве основы систем безопасности наших инструментов.
 
-    if (!isAgentInstance) {
-      try {
-        exported = new (Agent as any)(exported);
-      } catch {
-        if (typeof (Agent as any).fromDefinition === 'function') {
-          exported = (Agent as any).fromDefinition(exported);
-        } else {
-          throw new Error('Exported module is not an Agent and cannot be wrapped.');
+Акцент на частных случаях, а не на общих решениях:
+- Частные решения Ваших коллег по всей стране: 
+эффективные - чтобы Вы могли использовать этот опыт, и неудачные, чтобы Вы избежали рисков и угроз;
+- Решения постоянно обрастают нюансами – ежедневный контроль;
+- Разработка специализированных систем для сбора и контроля таких решений.
+
+2. Прогнозирование всех актуальных рисков и «придирок» за последние 4-5 лет.
+Разработка самых современных систем прогнозного анализа:
+- В основе систем лежат статистически обработанные реальные случаи «придирок», «ошибок», «сомнительных» действий – все это помогает нашим клиентам избегать собственных потерь;
+- Для всех таких случае разбираются успешные и неуспешные действия компаний, которые помогают выстроить работу так, чтобы не попасть в подобные ситуации.
+
+Контроль самых свежих рисков, которые еще только зарождаются (первые ласточки):
+- Постоянный контроль за новыми спорами, выявление тенденций угрожающих или наоборот помогающих нашим клиентам;
+- Если частный риск начинает набирать статистику, то перевод его в прогнозную систему и полный расклад.
+
+3. Поиск компромисса и четкое обоснование своих действий при взаимодействии с государством. Снижение возможных финансовых потерь.
+Анализ доводов, которые принимали или нет контролирующие органы:
+- Доводы, которые успешно приводили Ваши коллеги, методы доказывания своей правоты,  – все это помогает найти с контролирующими органами разумный компромисс;
+- Доводы и методы доказывания со стороны контролирующих органов – позволяют заранее подготовить нужные документы, чтобы хотя бы частично себя обезопасить.
+
+Системы помогающие снизить размер финансовых последствий:
+- Работа со штрафами и доначислениями от налоговой;
+- Эффективные системы по снижению и прогнозированию административных штрафов;
+- Самые сильные системы по работам с неустойками, убытками и прочими потерями."  :: Не сокращай цитаты.
+
+Рекомендованные решения 
+      Название рекомендованного решения: 
+      Как будет полезно :: описывай подробно в точности копируя информацию из файла "листовки.json" ( включай информацию из поля "description" "questions_covered" "features" "material_format" полностью не сокращая, не упоминай в ответе названия файлов и полей ). 
+      Аргументация, почему именно эти (чтобы сотрудник сразу мог донести ценность).
+      
+Аргументация на возражения приобрести новшество (В точности скопируй информацию из файла "ответы-на-возражения.json" ключа "Возражения и ответы" :: у каждого решения свой набор возражений :: выбери 3 возражения). Будь внимателен, подбирай аргументацию, точно соответствующую решению :: аргументы должен быть в формате: Возражение клиента - Ответ на возражение  :: добавь несколько аргументов 
+
+Итог: краткий список новшеств из ответа
+не упоминай названия файлов в ответе :: у пользователя не будет доступа к файлам, которые есть у тебя, поэтому не сокращай информацию`,
+  model: "gpt-5",
+  tools: [
+    fileSearch,
+    webSearchPreview,
+    codeInterpreter
+  ],
+  modelSettings: {
+    reasoning: {
+      effort: "low"
+    },
+    store: true
+  }
+});
+
+type WorkflowInput = { input_as_text: string };
+
+
+// Main code entrypoint
+export const runWorkflow = async (workflow: WorkflowInput) => {
+  const state = {
+
+  };
+  const conversationHistory: AgentInputItem[] = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: workflow.input_as_text
         }
-      }
+      ]
     }
+  ];
+  const runner = new Runner({
+    traceMetadata: {
+      __trace_source__: "agent-builder",
+      workflow_id: "wf_68ecb26d392c8190a1b664119b6ff5790f2bca3e43195c60"
+    }
+  });
+  const agent007ResultTemp = await runner.run(
+    agent007,
+    [
+      ...conversationHistory
+    ]
+  );
+  conversationHistory.push(...agent007ResultTemp.newItems.map((item) => item.rawItem));
 
-    agent = exported as Agent;
-
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    runner = new Runner(); // pass client in run(...)
-    console.log('[agent] Loaded Agent (SDK) + Runner');
-  } catch (e: any) {
-    console.warn('[agent] Fallback path:', e?.message);
-    const mod = await import('./agent/fallback-agent.js');
-    agent = (mod as any).default ?? (mod as any);
-    runner = null;
-    client = null;
-    console.warn('[agent] Using fallback agent');
+  if (!agent007ResultTemp.finalOutput) {
+      throw new Error("Agent result is undefined");
   }
+
+  const agent007Result = {
+    output_text: agent007ResultTemp.finalOutput ?? ""
+  };
 }
-await loadAgent();
-
-function extractText(raw: any): string {
-  let r: any = raw;
-  if (!r) return '';
-
-  // если прилетела строка — это может быть уже текст или сериализованный state
-  if (typeof r === 'string') {
-    const looksLikeJson = r.trim().startsWith('{') && r.includes('"state"');
-    if (looksLikeJson) {
-      try { r = JSON.parse(r); } catch { return r.trim(); }
-    } else {
-      return r.trim();
-    }
-  }
-
-  const pluck = (arr: any[] = []) =>
-    arr.map((c: any) => c?.text ?? c?.output_text ?? '')
-       .filter(Boolean)
-       .join('\n\n')
-       .trim();
-
-  // простые формы
-  if (typeof r.output_text === 'string' && r.output_text.trim()) return r.output_text.trim();
-  if (typeof r.finalOutput === 'string' && r.finalOutput.trim()) return r.finalOutput.trim();
-  if (Array.isArray(r.content)) {
-    const t = pluck(r.content);
-    if (t) return t;
-  }
-
-  // формы Runner/SDK через state/newItems/modelResponses
-  const s = r.state ?? r;
-
-  if (typeof s?.finalOutput === 'string' && s.finalOutput.trim()) return s.finalOutput.trim();
-
-  if (Array.isArray(s?.newItems)) {
-    const t = s.newItems
-      .flatMap((it: any) => it?.content ?? it?.rawItem?.content ?? [])
-      .map((c: any) => c?.text ?? c?.output_text ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (t) return t;
-  }
-
-  if (Array.isArray(s?.modelResponses)) {
-    const t = s.modelResponses
-      .flatMap((m: any) => m?.content ?? [])
-      .map((c: any) => c?.text ?? c?.output_text ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (t) return t;
-  }
-
-  // последний шанс — коротко возвращаем JSON (чтобы телеге не улетала «простыня»)
-  try { return JSON.stringify(r, null, 2).slice(0, 3500); }
-  catch { return String(r).slice(0, 3500); }
-}
-
-
-
-const app = express();
-app.use(bodyParser.json({ limit: '20mb' }));
-
-// Enforce JSON to avoid body parse surprises from Make/Telegram
-app.use((req, res, next) => {
-  if (!req.is('application/json')) {
-    return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
-  }
-  next();
-});
-
-app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
-
-
-
-app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
-  try {
-    const { chat_id, text, files } = req.body || {};
-
-    if (!text?.trim() && !(files?.length)) {
-      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
-    }
-
-    // Collapse input to a single user text for maximum compatibility
-    const parts: string[] = [];
-    if (text?.trim()) parts.push(text.trim());
-    if (files?.length) {
-      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
-    }
-    const userText = parts.join('\n\n');
-
-    const conversation_id = String(chat_id ?? 'no-chat');
-
-    const result = runner
-      ? await (runner as any).run(agent, userText, {
-          ...(client ? { client } : {}),
-          // support both modern and older SDK shapes
-          conversation_id,
-          config: { conversation_id }
-        } as any)
-      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
-
-    const answer = extractText(result);
-
-    return res.json({ ok: true, answer });
-  } catch (err: any) {
-    console.error('[/run] ERROR', err?.message, err?.stack);
-    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
-  }
-});
-
-
-const port = Number(process.env.PORT) || 3000;
-app.listen(port, () => console.log(`Agent service listening on :${port}`));
-
-
-const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; error?: string }>();
-
-function newJobId() {
-  return Math.random().toString(36).slice(2);
-}
+export default agent007;
