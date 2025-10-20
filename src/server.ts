@@ -1,3 +1,4 @@
+// src/server.ts
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
@@ -7,89 +8,62 @@ import { Runner, Agent } from '@openai/agents';
 type FileItem = { name: string; url: string };
 type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
 
-let agent: any;
-let runner: any = null; // keep as any to avoid SDK overload issues across versions
+let agent: Agent | any;
+let runner: Runner | any = null; // держим как any — меньше сюрпризов при смене версий SDK
 let client: OpenAI | null = null;
 
 async function loadAgent() {
-  try {
-    const mod = await import('./agent/exported-agent.js'); // after build .ts -> .js
-    let exported = (mod as any).default ?? (mod as any);
-
-    // If export is a factory, call it to get an Agent/definition
-    if (typeof exported === 'function') {
-      exported = await exported();
-    }
-
-    // Ensure we have an Agent instance; if it's a definition, wrap it
-    const isAgentInstance =
-      exported instanceof Agent ||
-      (exported && typeof (exported as any).getEnabledHandoffs === 'function');
-
-    if (!isAgentInstance) {
-      try {
-        exported = new (Agent as any)(exported);
-      } catch {
-        if (typeof (Agent as any).fromDefinition === 'function') {
-          exported = (Agent as any).fromDefinition(exported);
-        } else {
-          throw new Error('Exported module is not an Agent and cannot be wrapped.');
-        }
-      }
-    }
-
-    agent = exported as Agent;
-
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    runner = new Runner(); // pass client in run(...)
-    console.log('[agent] Loaded Agent (SDK) + Runner');
-  } catch (e: any) {
-    console.warn('[agent] Fallback path:', e?.message);
-    const mod = await import('./agent/fallback-agent.js');
-    agent = (mod as any).default ?? (mod as any);
-    runner = null;
-    client = null;
-    console.warn('[agent] Using fallback agent');
-  }
+  // после сборки TS -> JS путём остаётся .js
+  const mod = await import('./agent/exported-agent.js');
+  // exported-agent должен экспортировать getAgent(getRunner?)
+  // поддержим оба варианта: объект или фабрика
+  const maybeAgent = (mod.default ?? mod.agent ?? mod.getAgent?.()) as Agent | any;
+  if (!maybeAgent) throw new Error('Agent not found in ./agent/exported-agent.js');
+  return maybeAgent;
 }
-await loadAgent();
 
-const app = express();
-app.use(bodyParser.json({ limit: '20mb' }));
+function getRunner() {
+  if (runner) return runner;
+  runner = new Runner({
+    traceMetadata: { __trace_source__: 'server' }
+  });
+  return runner;
+}
 
-// Enforce JSON to avoid body parse surprises from Make/Telegram
-app.use((req, res, next) => {
-  if (!req.is('application/json')) {
-    return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
-  }
-  next();
-});
-
-app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
-
+/** Извлекаем человекочитаемый текст из ответа Runner/SDK */
 function extractText(raw: any): string {
-  // 1) Если пришла строка — это может быть уже текст ИЛИ JSON со state
   let r: any = raw;
-  if (typeof r === 'string') {
-    const looksLikeJson = r.trim().startsWith('{') && r.includes('"state"');
-    if (looksLikeJson) { try { r = JSON.parse(r); } catch { /* noop */ } else { return r.trim(); } }
-  }
   if (!r) return '';
 
-  const pluck = (arr: any[] = []) =>
-    arr.map((c: any) => c?.text ?? c?.output_text ?? '').filter(Boolean).join('\n\n').trim();
+  // если прилетела строка — это может быть уже текст или сериализованный state
+  if (typeof r === 'string') {
+    const looksLikeJson = r.trim().startsWith('{') && r.includes('"state"');
+    if (looksLikeJson) {
+      try { r = JSON.parse(r); } catch { return r.trim(); }
+    } else {
+      return r.trim();
+    }
+  }
 
-  // Старые/простые формы
+  const pluck = (arr: any[] = []) =>
+    arr.map((c: any) => c?.text ?? c?.output_text ?? '')
+       .filter(Boolean)
+       .join('\n\n')
+       .trim();
+
+  // простые формы
   if (typeof r.output_text === 'string' && r.output_text.trim()) return r.output_text.trim();
   if (typeof r.finalOutput === 'string' && r.finalOutput.trim()) return r.finalOutput.trim();
-  if (Array.isArray(r.content)) { const t = pluck(r.content); if (t) return t; }
+  if (Array.isArray(r.content)) {
+    const t = pluck(r.content);
+    if (t) return t;
+  }
 
-  // Формы Runner/SDK через state
+  // формы Runner/SDK через state/newItems/modelResponses
   const s = r.state ?? r;
 
   if (typeof s?.finalOutput === 'string' && s.finalOutput.trim()) return s.finalOutput.trim();
 
-  // newItems (могут лежать как массив структур с content/rawItem.content)
   if (Array.isArray(s?.newItems)) {
     const t = s.newItems
       .flatMap((it: any) => it?.content ?? it?.rawItem?.content ?? [])
@@ -100,7 +74,6 @@ function extractText(raw: any): string {
     if (t) return t;
   }
 
-  // modelResponses[].content[].text
   if (Array.isArray(s?.modelResponses)) {
     const t = s.modelResponses
       .flatMap((m: any) => m?.content ?? [])
@@ -111,42 +84,48 @@ function extractText(raw: any): string {
     if (t) return t;
   }
 
-  // Последний шанс — возвращаем аккуратно усечённый JSON,
-  // чтобы в Telegram не улетала «простыня»
+  // последний шанс — коротко возвращаем JSON (чтобы телеге не улетала «простыня»)
   try { return JSON.stringify(r, null, 2).slice(0, 3500); }
   catch { return String(r).slice(0, 3500); }
 }
 
+const app = express();
+app.use(bodyParser.json({ limit: '12mb' }));
+app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
-    const { chat_id, text, files } = req.body || {};
+    if (!agent) agent = await loadAgent();
+    if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const r = getRunner();
 
-    if (!text?.trim() && !(files?.length)) {
-      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
+    const { text, files = [] } = req.body || {};
+    const userInput: any[] = [];
+
+    if (text && String(text).trim()) {
+      userInput.push({ role: 'user', content: [{ type: 'output_text', text: String(text) }] });
     }
 
-    // Collapse input to a single user text for maximum compatibility
-    const parts: string[] = [];
-    if (text?.trim()) parts.push(text.trim());
-    if (files?.length) {
-      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
+    // передаём файлы как ссылки (агент их сам подтянет/проинтерпретирует, если так настроен)
+    for (const f of files) {
+      if (!f?.url) continue;
+      userInput.push({
+        role: 'user',
+        content: [{ type: 'input_text', text: `file: ${f.name || 'attachment'} -> ${f.url}` }]
+      });
     }
-    const userText = parts.join('\n\n');
 
-    const conversation_id = String(chat_id ?? 'no-chat');
-
-    const result = runner
-      ? await (runner as any).run(agent, userText, {
-          ...(client ? { client } : {}),
-          // support both modern and older SDK shapes
-          conversation_id,
-          config: { conversation_id }
-        } as any)
-      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
+    // запустим раннер
+    const result = await r.run(agent, userInput, {
+      model: 'gpt-5', // можно переопределять env-переменной
+      modelSettings: {
+        reasoning: { effort: 'low' },
+        store: false,
+        maxOutputTokens: 1500
+      }
+    });
 
     const answer = extractText(result);
-
     return res.json({ ok: true, answer });
   } catch (err: any) {
     console.error('[/run] ERROR', err?.message, err?.stack);
@@ -154,13 +133,5 @@ app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   }
 });
 
-
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => console.log(`Agent service listening on :${port}`));
-
-
-const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; error?: string }>();
-
-function newJobId() {
-  return Math.random().toString(36).slice(2);
-}
