@@ -129,42 +129,57 @@ app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
 
 
-app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
+app.post("/run", async (req, res) => {
   try {
-    const { chat_id, text, files } = req.body || {};
+    const { text, file_ids } = req.body as {
+      text?: string;
+      file_ids?: string[];
+    };
 
-    if (!text?.trim() && !(files?.length)) {
-      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "Missing 'text' in body" });
+    }
+    if (!Array.isArray(file_ids) || file_ids.length === 0) {
+      return res.status(400).json({ error: "Missing 'file_ids' in body" });
     }
 
-    // Collapse input to a single user text for maximum compatibility
-    const parts: string[] = [];
-    if (text?.trim()) parts.push(text.trim());
-    if (files?.length) {
-      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
-    }
-    const userText = parts.join('\n\n');
+    const runner = new Runner({ client });
+    const result = await runner.run(agent, {
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      ],
+      attachments: file_ids.map((id) => ({
+        file_id: id,
+        tools: [{ type: "code_interpreter" }],
+      })),
+    });
 
-    const conversation_id = String(chat_id ?? 'no-chat');
+    const textOut =
+      result.output_text ??
+      (Array.isArray(result.output)
+        ? result.output
+            .map((c: any) =>
+              c?.content
+                ?.filter((p: any) => p?.type === "output_text")
+                ?.map((p: any) => p?.text)
+                ?.join("\n")
+            )
+            .filter(Boolean)
+            .join("\n")
+        : "");
 
-    const result = runner
-      ? await (runner as any).run(agent, userText, {
-          ...(client ? { client } : {}),
-          // support both modern and older SDK shapes
-          conversation_id,
-          config: { conversation_id }
-        } as any)
-      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
-
-    const answer = extractText(result);
-
-    return res.json({ ok: true, answer });
+    return res.json({ text: textOut || "Файл обработан, но текст пуст." });
   } catch (err: any) {
-    console.error('[/run] ERROR', err?.message, err?.stack);
-    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
+    console.error("RUN ERROR:", err?.response?.data ?? err);
+    return res.status(500).json({
+      error: "Agent run failed",
+      details: err?.response?.data ?? err?.message ?? String(err),
+    });
   }
 });
-
 
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => console.log(`Agent service listening on :${port}`));
