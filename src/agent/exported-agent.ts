@@ -82,45 +82,27 @@ const agent007 = new Agent({
   }
 });
 
-type WorkflowInput = { input_as_text: string };
+export async function runAgent(
+  client: OpenAI,
+  {
+    text,
+    file_ids = []
+  }: { text: string; file_ids?: string[] }
+): Promise<{ output_text: string }> {
+  const runner = new Runner({ client });
 
-
-// Main code entrypoint
-export const runWorkflow = async (workflow: WorkflowInput) => {
-  const state = {
-
-  };
-  const conversationHistory: AgentInputItem[] = [
-    {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: workflow.input_as_text
-        }
-      ]
-    }
-  ];
-  const runner = new Runner({
-    traceMetadata: {
-      __trace_source__: "agent-builder",
-      workflow_id: "wf_68ecb26d392c8190a1b664119b6ff5790f2bca3e43195c60"
-    }
+  const result = await runner.run(agent007, {
+    input: [
+      { role: "user", content: [{ type: "input_text", text }] }
+    ],
+    attachments: file_ids.map((id) => ({
+      file_id: id,
+      tools: [{ type: "code_interpreter" }]
+    }))
   });
-  const agent007ResultTemp = await runner.run(
-    agent007,
-    [
-      ...conversationHistory
-    ]
-  );
-  conversationHistory.push(...agent007ResultTemp.newItems.map((item) => item.rawItem));
 
-  if (!agent007ResultTemp.finalOutput) {
-      throw new Error("Agent result is undefined");
-  }
-
-  const agent007Result = {
-    output_text: agent007ResultTemp.finalOutput ?? ""
-  };
+  // у новых версий есть result.output_text; делаем фолбэк на пустую строку
+  return { output_text: result.output_text ?? "" };
 }
+
 export default agent007;
