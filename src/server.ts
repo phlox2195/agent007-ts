@@ -129,20 +129,41 @@ app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
 
 
-app.post("/run", async (req, res) => {
+app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
   try {
-    const { text, file_ids } = req.body as { text?: string; file_ids?: string[] };
-    if (!text?.trim()) return res.status(400).json({ error: "Missing 'text'" });
-    if (!file_ids?.length) return res.status(400).json({ error: "Missing 'file_ids'" });
+    const { chat_id, text, files } = req.body || {};
 
-    const out = await runAgent({ text, file_ids });
-    res.json({ text: out.output_text || "Текст пуст." });
-  } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ error: e?.message ?? "Agent run failed" });
+    if (!text?.trim() && !(files?.length)) {
+      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
+    }
+
+    // Collapse input to a single user text for maximum compatibility
+    const parts: string[] = [];
+    if (text?.trim()) parts.push(text.trim());
+    if (files?.length) {
+      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
+    }
+    const userText = parts.join('\n\n');
+
+    const conversation_id = String(chat_id ?? 'no-chat');
+
+    const result = runner
+      ? await (runner as any).run(agent, userText, {
+          ...(client ? { client } : {}),
+          // support both modern and older SDK shapes
+          conversation_id,
+          config: { conversation_id }
+        } as any)
+      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
+
+    const answer = extractText(result);
+
+    return res.json({ ok: true, answer });
+  } catch (err: any) {
+    console.error('[/run] ERROR', err?.message, err?.stack);
+    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
   }
 });
-
 
 
 const port = Number(process.env.PORT) || 3000;
