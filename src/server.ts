@@ -84,17 +84,15 @@ app.post("/run", async (req, res) => {
     ];
 
     
-    const fileIds: string[] = allFileIds; 
-    const content: NonNullable<AgentInputItem["content"]> = [
+    const content = [
        { type: "input_text", text },
         ...allFileIds.map((id) => ({
         type: "input_file" as const,
         file: { id },                 
       })),
-    ];
+    ] as const;
     const agentInput = [{ role: "user" as const, content }];
-    const out = await runner.run(agent, [{ role: "user" as const, content }] as any);
-
+    const out = await runner.run(agent, agentInput);
     
     res.json(out);
   } catch (err: any) {
