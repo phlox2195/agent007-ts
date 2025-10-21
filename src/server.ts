@@ -1,3 +1,4 @@
+import { VS_ID } from "./src/config";  
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -97,18 +98,18 @@ app.post("/run", async (req, res) => {
     ];
 
     type ContentItem =
-      | { type: "input_text"; text: string }
-      | { type: "input_file"; file: { id: string } };
-    
+  | { type: "input_text"; text: string }
+  | { type: "input_file"; file: { id: string } };
+
     const content: ContentItem[] = [
       { type: "input_text", text },
-      ...allFileIds.map((id) => ({
+      ...allFileIds.map((id): ContentItem => ({   // ← ВАЖНО: аннотация возврата
         type: "input_file",
         file: { id },
       })),
     ];
 
-    const agentInput = [{ role: "user", content }];
+    const agentInput = [{ role: "user" as const, content }];
     const out = await runner.run(agent, agentInput);
     
     res.json(out);
