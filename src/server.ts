@@ -1,203 +1,127 @@
-import 'dotenv/config';
-import express, { Request, Response } from 'express';
-import bodyParser from 'body-parser';
-import OpenAI from 'openai';
-import { Runner, Agent } from '@openai/agents';
-import axios from "axios";
+import express from "express";
 import fs from "fs";
 import path from "path";
+import axios from "axios";
+import { OpenAI } from "openai";
+import {
+  Agent,
+  Runner,
+  AgentInputItem,
+  fileSearchTool,
+  codeInterpreterTool,
+} from "@openai/agents";
 
-type FileItem = { name: string; url: string };
-type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
+// 1) Клиент OpenAI (ключ обязателен в env Render)
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-let agent: any;
-let runner: any = null; // keep as any to avoid SDK overload issues across versions
-let client: OpenAI | null = null;
+// 2) Импорт агента из отдельного файла.
+// ---- Вариант А: exported-agent.ts экспортирует ГОТОВЫЙ экземпляр Agent ----
+// import agent from "./exported-agent";  // если по умолчанию
+// или: import { agent } from "./exported-agent";
 
-async function loadAgent() {
-  try {
-    const mod = await import('./agent/exported-agent.js'); // after build .ts -> .js
-    let exported = (mod as any).default ?? (mod as any);
+// ---- Вариант Б: exported-agent.ts экспортирует фабрику/конфиг ----
+import { buildAgent } from "./exported-agent"; // <— если у вас фабрика
+const agent: Agent =
+  typeof buildAgent === "function"
+    ? buildAgent() // фабрика должна сама указать model, tools, instructions
+    : new Agent({
+        // fallback (если фабрики нет; можно удалить целиком этот блок)
+        name: "agent007",
+        model: "gpt-5",
+        instructions:
+          "Проанализируй приложенный PDF и сделай отчет для менеджера КонсультантПлюс.",
+        tools: [codeInterpreterTool(), fileSearchTool()],
+      });
 
-    // If export is a factory, call it to get an Agent/definition
-    if (typeof exported === 'function') {
-      exported = await exported();
-    }
-
-    // Ensure we have an Agent instance; if it's a definition, wrap it
-    const isAgentInstance =
-      exported instanceof Agent ||
-      (exported && typeof (exported as any).getEnabledHandoffs === 'function');
-
-    if (!isAgentInstance) {
-      try {
-        exported = new (Agent as any)(exported);
-      } catch {
-        if (typeof (Agent as any).fromDefinition === 'function') {
-          exported = (Agent as any).fromDefinition(exported);
-        } else {
-          throw new Error('Exported module is not an Agent and cannot be wrapped.');
-        }
-      }
-    }
-
-    agent = exported as Agent;
-
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    runner = new Runner(); // pass client in run(...)
-    console.log('[agent] Loaded Agent (SDK) + Runner');
-  } catch (e: any) {
-    console.warn('[agent] Fallback path:', e?.message);
-    const mod = await import('./agent/fallback-agent.js');
-    agent = (mod as any).default ?? (mod as any);
-    runner = null;
-    client = null;
-    console.warn('[agent] Using fallback agent');
-  }
-}
-await loadAgent();
-
-function extractText(raw: any): string {
-  let r: any = raw;
-  if (!r) return '';
-
-  // если прилетела строка — это может быть уже текст или сериализованный state
-  if (typeof r === 'string') {
-    const looksLikeJson = r.trim().startsWith('{') && r.includes('"state"');
-    if (looksLikeJson) {
-      try { r = JSON.parse(r); } catch { return r.trim(); }
-    } else {
-      return r.trim();
-    }
-  }
-
-  const pluck = (arr: any[] = []) =>
-    arr.map((c: any) => c?.text ?? c?.output_text ?? '')
-       .filter(Boolean)
-       .join('\n\n')
-       .trim();
-
-  // простые формы
-  if (typeof r.output_text === 'string' && r.output_text.trim()) return r.output_text.trim();
-  if (typeof r.finalOutput === 'string' && r.finalOutput.trim()) return r.finalOutput.trim();
-  if (Array.isArray(r.content)) {
-    const t = pluck(r.content);
-    if (t) return t;
-  }
-
-  // формы Runner/SDK через state/newItems/modelResponses
-  const s = r.state ?? r;
-
-  if (typeof s?.finalOutput === 'string' && s.finalOutput.trim()) return s.finalOutput.trim();
-
-  if (Array.isArray(s?.newItems)) {
-    const t = s.newItems
-      .flatMap((it: any) => it?.content ?? it?.rawItem?.content ?? [])
-      .map((c: any) => c?.text ?? c?.output_text ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (t) return t;
-  }
-
-  if (Array.isArray(s?.modelResponses)) {
-    const t = s.modelResponses
-      .flatMap((m: any) => m?.content ?? [])
-      .map((c: any) => c?.text ?? c?.output_text ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (t) return t;
-  }
-
-  // последний шанс — коротко возвращаем JSON (чтобы телеге не улетала «простыня»)
-  try { return JSON.stringify(r, null, 2).slice(0, 3500); }
-  catch { return String(r).slice(0, 3500); }
-}
-
-
+// 3) Runner без client в конфиге (иначе TS-ошибка)
+const runner = new Runner();
 
 const app = express();
-app.use(express.json({ limit: "20mb" })); // тут только JSON (текст, ссылки и т. п.)
+app.use(express.json({ limit: "20mb" }));
 
+// Утилита: скачать файл по URL -> загрузить в OpenAI -> вернуть file_id
 async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
   const tmp = path.join("/tmp", `${Date.now()}_${path.basename(filenameHint)}`);
-  const resp = await axios.get(url, { responseType: "stream" });
-  await new Promise<void>((res, rej) => {
+  const resp = await axios.get(url, { responseType: "stream", timeout: 60_000 });
+  await new Promise<void>((resolve, reject) => {
     const w = fs.createWriteStream(tmp);
     resp.data.pipe(w);
-    w.on("finish", () => res());
-    w.on("error", rej);
+    w.on("finish", () => resolve());
+    w.on("error", reject);
   });
   const file = await client.files.create({
     file: fs.createReadStream(tmp),
-    purpose: "assistants", // верно для Agents/Assistants
+    purpose: "assistants",
   });
   return file.id;
 }
 
+// (Опционально) создать vector store и закинуть туда файлы для file_search
+async function ensureVectorStoreFor(fileIds: string[]) {
+  if (!fileIds.length) return { vsId: undefined as string | undefined };
+  const vs = await client.vectorStores.create({ name: `vs_${Date.now()}` });
+  // дождаться индексации
+  await Promise.all(
+    fileIds.map((fid) => client.vectorStores.files.createAndPoll(vs.id, { file_id: fid }))
+  );
+  return { vsId: vs.id };
+}
 
-// Enforce JSON to avoid body parse surprises from Make/Telegram
-app.use((req, res, next) => {
-  if (!req.is('application/json')) {
-    return res.status(415).json({ ok: false, error: 'Content-Type must be application/json' });
-  }
-  next();
-});
-
-app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
-
-
-
+/**
+ * POST /run
+ * Body JSON:
+ * {
+ *   "text": "Сделай отчет",
+ *   "file_urls": ["https://api.telegram.org/file/bot<TOKEN>/<file_path>", "..."],
+ *   "file_ids": ["file_abc123"] // если уже загружали в OpenAI ранее (через Make/ваш бэкенд)
+ * }
+ */
 app.post("/run", async (req, res) => {
   try {
     const { text = "", file_urls = [], file_ids = [] } = req.body as {
-      text: string;
+      text?: string;
       file_urls?: string[];
       file_ids?: string[];
     };
 
-    // 1) если пришли URL — скачиваем и загружаем их в OpenAI
+    // 1) Скачиваем и загружаем все URL в OpenAI (получаем file_id)
     const uploadedIds: string[] = [];
     for (const url of file_urls) {
-      const id = await uploadToOpenAIFromUrl(url);
-      uploadedIds.push(id);
+      const fid = await uploadToOpenAIFromUrl(url);
+      uploadedIds.push(fid);
     }
-    const allIds = [...file_ids, ...uploadedIds];
+    const allFileIds = [...file_ids, ...uploadedIds];
 
-    // 2) (опционально) кинем эти файлы также в vector store для file_search
-    const vs = await client.vectorStores.create({ name: `vs_${Date.now()}` });
-    await Promise.all(
-      allIds.map(async (fid) => {
-        await client.vectorStores.files.createAndPoll(vs.id, { file_id: fid });
-      })
-    );
+    // 2) (опционально) Индексируем для file_search
+    const { vsId } = await ensureVectorStoreFor(allFileIds);
 
-    const runner = new Runner({ client });
+    // 3) Формируем корректный input для Runner.run
+    const input: AgentInputItem[] = [
+      { role: "user", content: [{ type: "input_text", text }] },
+    ];
 
-    const out = await runner.run(agent, {
-      input: [{ role: "user", content: [{ type: "input_text", text }] }],
-      tool_config: { file_search: { vector_store_ids: [vs.id] } },
-      attachments: allIds.map((id) => ({
+    // 4) attachments: важно указать инструменты, которые получат доступ к файлам
+    const attachments =
+      allFileIds.map((id) => ({
         file_id: id,
         tools: [{ type: "code_interpreter" }, { type: "file_search" }],
-      })),
+      })) ?? [];
+
+    // 5) Вызов агента (ВАЖНО: второй аргумент — массив input; опции — третьим)
+    const out = await runner.run(agent, input, {
+      attachments,
+      tool_config: vsId ? { file_search: { vector_store_ids: [vsId] } } : undefined,
+      // при необходимости можно добавить response_format, max_output_tokens и т.д.
     });
 
     res.json(out);
-  } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ error: e?.message ?? "run_failed" });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: err?.message ?? "run_failed" });
   }
 });
 
+app.get("/healthz", (_req, res) => res.send("ok"));
 
-const port = Number(process.env.PORT) || 3000;
-app.listen(port, () => console.log(`Agent service listening on :${port}`));
-
-
-const jobs = new Map<string, { status: 'pending'|'done'|'error'; result?: any; error?: string }>();
-
-function newJobId() {
-  return Math.random().toString(36).slice(2);
-}
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Agent service listening on :${PORT}`));
