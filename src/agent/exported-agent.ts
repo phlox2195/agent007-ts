@@ -80,3 +80,9 @@ export function buildAgentWithVS(vsId: string) {
 не упоминай названия файлов в ответе :: у пользователя не будет доступа к файлам, которые есть у тебя, поэтому не сокращай информацию`
   });
 }
+
+export default function agentFromEnv() {
+  const vsId = process.env.VECTOR_STORE_ID;
+  if (!vsId) throw new Error("VECTOR_STORE_ID is not set");
+  return buildAgentWithVS(vsId);
+}
