@@ -83,15 +83,19 @@ app.post("/run", async (req, res) => {
       { role: "user", content: [{ type: "input_text", text }] },
     ];
 
+    type ContentItem =
+      | { type: "input_text"; text: string }
+      | { type: "input_file"; file: { id: string } };
     
-    const content = [
-       { type: "input_text", text },
-        ...allFileIds.map((id) => ({
-        type: "input_file" as const,
-        file: { id },                 
+    const content: ContentItem[] = [
+      { type: "input_text", text },
+      ...allFileIds.map((id) => ({
+        type: "input_file",
+        file: { id },
       })),
-    ] as const;
-    const agentInput = [{ role: "user" as const, content }];
+    ];
+
+    const agentInput = [{ role: "user", content }];
     const out = await runner.run(agent, agentInput);
     
     res.json(out);
