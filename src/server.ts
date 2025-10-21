@@ -92,7 +92,7 @@ app.post("/run", async (req, res) => {
         file: { id },                 
       })),
     ];
-    const agentInput: AgentInputItem[] = [{ role: "user", content }];
+    const agentInput = [{ role: "user" as const, content }];
     const out = await runner.run(agent, agentInput);
     
     res.json(out);
