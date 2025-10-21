@@ -1,4 +1,4 @@
-import { VS_ID } from "./config";  
+import { VS_ID } from "src/config.ts";  
 import express from "express";
 import fs from "fs";
 import path from "path";
