@@ -14,24 +14,7 @@ import {
 // 1) Клиент OpenAI (ключ обязателен в env Render)
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// 2) Импорт агента из отдельного файла.
-// ---- Вариант А: exported-agent.ts экспортирует ГОТОВЫЙ экземпляр Agent ----
-// import agent from "./exported-agent";  // если по умолчанию
-// или: import { agent } from "./exported-agent";
-
-// ---- Вариант Б: exported-agent.ts экспортирует фабрику/конфиг ----
-import { buildAgent } from "./exported-agent"; // <— если у вас фабрика
-const agent: Agent =
-  typeof buildAgent === "function"
-    ? buildAgent() // фабрика должна сама указать model, tools, instructions
-    : new Agent({
-        // fallback (если фабрики нет; можно удалить целиком этот блок)
-        name: "agent007",
-        model: "gpt-5",
-        instructions:
-          "Проанализируй приложенный PDF и сделай отчет для менеджера КонсультантПлюс.",
-        tools: [codeInterpreterTool(), fileSearchTool()],
-      });
+import agent from "./exported-agent";
 
 // 3) Runner без client в конфиге (иначе TS-ошибка)
 const runner = new Runner();
