@@ -1,4 +1,4 @@
-import { VS_ID } from "./src/config";
+import { VS_ID } from "./config";
 import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, type AgentInputItem, Runner } from "@openai/agents";
 
 
