@@ -93,7 +93,8 @@ app.post("/run", async (req, res) => {
       })),
     ];
     const agentInput = [{ role: "user" as const, content }];
-    const out = await runner.run(agent, agentInput);
+    const out = await runner.run(agent, [{ role: "user" as const, content }] as any);
+
     
     res.json(out);
   } catch (err: any) {
