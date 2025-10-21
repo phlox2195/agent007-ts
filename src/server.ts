@@ -48,34 +48,39 @@ let VS_ID_PROMISE = ensureVectorStoreId();
 
 app.post("/run", async (req, res) => {
   try {
-    const { text = "", file_urls = [], file_ids = [] } = req.body as {
-      text?: string;
-      file_urls?: string[];
-      file_ids?: string[];
-    };
+    const { text = "", file_urls, file_ids } = req.body as any;
 
-    // 1) гарантируем VS
-    const vsId = await VS_ID_PROMISE;
+    const fileUrls: string[] = Array.isArray(file_urls)
+      ? file_urls
+      : (typeof file_urls === "string" && file_urls ? [file_urls] : []);
 
-    // 2) загружаем входные URL в OpenAI, собираем все ids
+    const openAiIds: string[] = Array.isArray(file_ids)
+      ? file_ids
+      : (typeof file_ids === "string" && file_ids ? [file_ids] : []);
+
+    // 2) Загружаем все Telegram-URL в OpenAI
     const uploadedIds: string[] = [];
-    for (const url of file_urls) uploadedIds.push(await uploadToOpenAIFromUrl(url));
-    const allFileIds = [...file_ids, ...uploadedIds];
+    for (const url of fileUrls) {
+      if (typeof url !== "string" || !/^https?:\/\//i.test(url)) continue; // защита от мусора
+      const fid = await uploadToOpenAIFromUrl(url);
+      uploadedIds.push(fid);
+    }
 
+    const allFileIds: string[] = [...openAiIds, ...uploadedIds];
+    const vsId = await VS_ID_PROMISE;
     // 3) докладываем каждый файл в постоянный VS (для file_search)
     if (allFileIds.length) {
-      await Promise.all(
-        allFileIds.map(async (fid) => {
-          try {
-            await client.vectorStores.files.createAndPoll(vsId, { file_id: fid });
-          } catch (e: any) {
-            const msg = String(e?.message ?? "");
-            // игнорируем "already exists" и похожие конфликты
-            if (e?.status !== 409 && !/already exists/i.test(msg)) throw e;
-          }
-        })
-      );
-    }
+  await Promise.all(
+    allFileIds.map(async (fid) => {
+      try {
+        await client.vectorStores.files.createAndPoll(vsId, { file_id: fid });
+      } catch (e: any) {
+        const msg = String(e?.message ?? "");
+        if (e?.status !== 409 && !/already exists/i.test(msg)) throw e;
+      }
+    })
+  );
+}
 
     // 4) формируем input: текст + файлы (для доступа код-интерпретеру)
     type ContentItem =
@@ -98,7 +103,8 @@ app.post("/run", async (req, res) => {
     // res.json({ text: plain });
 
     res.json(out);
-  } catch (err: any) {
+  } 
+  catch (err: any) {
     console.error(err);
     res.status(500).json({ error: err?.message ?? "run_failed" });
   }
