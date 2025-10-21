@@ -90,13 +90,18 @@ app.post("/run", async (req, res) => {
         tools: [{ type: "code_interpreter" }, { type: "file_search" }],
       })) ?? [];
 
-    // 5) Вызов агента (ВАЖНО: второй аргумент — массив input; опции — третьим)
-    const out = await runner.run(agent, input, {
-      attachments,
-      tool_config: vsId ? { file_search: { vector_store_ids: [vsId] } } : undefined,
-      // при необходимости можно добавить response_format, max_output_tokens и т.д.
-    });
-
+    const fileIds: string[] = allFileIds; 
+    const content = [
+       { type: "input_text", text },
+       ...allFileIds.map((id) => ({
+          type: "input_file" as const,
+          file_id: id,
+          tools: [{ type: "code_interpreter" as const }, { type: "file_search" as const }],
+          })),
+     ];
+    const agentInput: AgentInputItem[] = [{ role: "user", content }];
+     const out = await runner.run(agent, agentInput);
+    
     res.json(out);
   } catch (err: any) {
     console.error(err);
