@@ -16,6 +16,8 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 import agent from "./agent/exported-agent";
 
+const VS_ID = "vs_68efae11ac88191afdfcc16e623ab5f"; // ваш постоянный vector store
+
 // 3) Runner без client в конфиге (иначе TS-ошибка)
 const runner = new Runner();
 
@@ -75,8 +77,19 @@ app.post("/run", async (req, res) => {
     }
     const allFileIds = [...file_ids, ...uploadedIds];
 
-    // 2) (опционально) Индексируем для file_search
-    const { vsId } = await ensureVectorStoreFor(allFileIds);
+        // Добавляем все файлы в постоянный vector store, чтобы file_search их видел
+    await Promise.all(
+      allFileIds.map(async (fid) => {
+        try {
+          await client.vectorStores.files.createAndPoll(VS_ID, { file_id: fid });
+        } catch (e: any) {
+          // Если файл уже в VS или случился transient-косяк — не валим весь запрос
+          if (e?.status !== 409) { // 409 = "already exists" у некоторых реализаций
+            throw e;
+          }
+        }
+      })
+    );
 
     // 3) Формируем корректный input для Runner.run
     const input: AgentInputItem[] = [
