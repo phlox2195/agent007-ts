@@ -83,24 +83,17 @@ app.post("/run", async (req, res) => {
       { role: "user", content: [{ type: "input_text", text }] },
     ];
 
-    // 4) attachments: важно указать инструменты, которые получат доступ к файлам
-    const attachments =
-      allFileIds.map((id) => ({
-        file_id: id,
-        tools: [{ type: "code_interpreter" }, { type: "file_search" }],
-      })) ?? [];
-
+    
     const fileIds: string[] = allFileIds; 
-    const content = [
+    const content: NonNullable<AgentInputItem["content"]> = [
        { type: "input_text", text },
-       ...allFileIds.map((id) => ({
-          type: "input_file" as const,
-          file_id: id,
-          tools: [{ type: "code_interpreter" as const }, { type: "file_search" as const }],
-          })),
-     ];
+        ...allFileIds.map((id) => ({
+        type: "input_file" as const,
+        file: { id },                 
+      })),
+    ];
     const agentInput: AgentInputItem[] = [{ role: "user", content }];
-     const out = await runner.run(agent, agentInput);
+    const out = await runner.run(agent, agentInput);
     
     res.json(out);
   } catch (err: any) {
