@@ -17,7 +17,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 import agent from "./agent/exported-agent";
 
-const VS_ID = "vs_68efae11ac88191afdfcc16e623ab5f"; // ваш постоянный vector store
+
 
 // 3) Runner без client в конфиге (иначе TS-ошибка)
 const runner = new Runner();
