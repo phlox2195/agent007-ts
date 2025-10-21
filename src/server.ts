@@ -15,7 +15,7 @@ import {
 // 1) Клиент OpenAI (ключ обязателен в env Render)
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-import agent from "./agent/exported-agent";
+import agent from "./agent/exported-agent.js";
 
 
 
