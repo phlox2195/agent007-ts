@@ -115,7 +115,24 @@ function extractText(raw: any): string {
 
 
 const app = express();
-app.use(bodyParser.json({ limit: '20mb' }));
+app.use(express.json({ limit: "20mb" })); // тут только JSON (текст, ссылки и т. п.)
+
+async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
+  const tmp = path.join("/tmp", `${Date.now()}_${path.basename(filenameHint)}`);
+  const resp = await axios.get(url, { responseType: "stream" });
+  await new Promise<void>((res, rej) => {
+    const w = fs.createWriteStream(tmp);
+    resp.data.pipe(w);
+    w.on("finish", () => res());
+    w.on("error", rej);
+  });
+  const file = await client.files.create({
+    file: fs.createReadStream(tmp),
+    purpose: "assistants", // верно для Agents/Assistants
+  });
+  return file.id;
+}
+
 
 // Enforce JSON to avoid body parse surprises from Make/Telegram
 app.use((req, res, next) => {
@@ -129,39 +146,45 @@ app.get('/health', (_: Request, res: Response) => res.json({ ok: true }));
 
 
 
-app.post('/run', async (req: Request<{}, {}, RunBody>, res: Response) => {
+app.post("/run", async (req, res) => {
   try {
-    const { chat_id, text, files } = req.body || {};
+    const { text = "", file_urls = [], file_ids = [] } = req.body as {
+      text: string;
+      file_urls?: string[];
+      file_ids?: string[];
+    };
 
-    if (!text?.trim() && !(files?.length)) {
-      return res.status(400).json({ ok: false, error: 'Empty input: provide text or files[]' });
+    // 1) если пришли URL — скачиваем и загружаем их в OpenAI
+    const uploadedIds: string[] = [];
+    for (const url of file_urls) {
+      const id = await uploadToOpenAIFromUrl(url);
+      uploadedIds.push(id);
     }
+    const allIds = [...file_ids, ...uploadedIds];
 
-    // Collapse input to a single user text for maximum compatibility
-    const parts: string[] = [];
-    if (text?.trim()) parts.push(text.trim());
-    if (files?.length) {
-      parts.push('Файлы:\n' + files.map((f: FileItem) => `- ${f.name}: ${f.url}`).join('\n'));
-    }
-    const userText = parts.join('\n\n');
+    // 2) (опционально) кинем эти файлы также в vector store для file_search
+    const vs = await client.vectorStores.create({ name: `vs_${Date.now()}` });
+    await Promise.all(
+      allIds.map(async (fid) => {
+        await client.vectorStores.files.createAndPoll(vs.id, { file_id: fid });
+      })
+    );
 
-    const conversation_id = String(chat_id ?? 'no-chat');
+    const runner = new Runner({ client });
 
-    const result = runner
-      ? await (runner as any).run(agent, userText, {
-          ...(client ? { client } : {}),
-          // support both modern and older SDK shapes
-          conversation_id,
-          config: { conversation_id }
-        } as any)
-      : await agent.run({ input: [{ role: 'user', content: userText }], conversation_id });
+    const out = await runner.run(agent, {
+      input: [{ role: "user", content: [{ type: "input_text", text }] }],
+      tool_config: { file_search: { vector_store_ids: [vs.id] } },
+      attachments: allIds.map((id) => ({
+        file_id: id,
+        tools: [{ type: "code_interpreter" }, { type: "file_search" }],
+      })),
+    });
 
-    const answer = extractText(result);
-
-    return res.json({ ok: true, answer });
-  } catch (err: any) {
-    console.error('[/run] ERROR', err?.message, err?.stack);
-    return res.status(500).json({ ok: false, error: err?.message || 'Agent error' });
+    res.json(out);
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e?.message ?? "run_failed" });
   }
 });
 
