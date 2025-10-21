@@ -3,6 +3,9 @@ import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import { Runner, Agent } from '@openai/agents';
+import axios from "axios";
+import fs from "fs";
+import path from "path";
 
 type FileItem = { name: string; url: string };
 type RunBody = { chat_id?: string | number; text?: string; files?: FileItem[] };
