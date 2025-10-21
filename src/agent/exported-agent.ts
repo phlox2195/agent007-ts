@@ -3,7 +3,7 @@ import { fileSearchTool, webSearchTool, codeInterpreterTool, Agent, type AgentIn
 
 // Tool definitions
 const fileSearch = fileSearchTool([
-  "vs_68efae111ac88191afdfcc16e623ab5f"
+  VS_ID
 ])
 const webSearchPreview = webSearchTool({
   searchContextSize: "medium",
