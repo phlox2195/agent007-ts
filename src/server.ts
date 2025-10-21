@@ -14,7 +14,7 @@ import {
 // 1) Клиент OpenAI (ключ обязателен в env Render)
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-import agent from "./exported-agent";
+import agent from "./agent/exported-agent";
 
 // 3) Runner без client в конфиге (иначе TS-ошибка)
 const runner = new Runner();
