@@ -110,6 +110,9 @@ app.post("/run", async (req, res) => {
   }
 });
 
+app.get("/", (_req, res) => {
+  res.status(200).send("Agent007 API is running. Use POST /run");
+});
 app.get("/healthz", (_req, res) => res.send("ok"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Agent service listening on :${PORT}`));
