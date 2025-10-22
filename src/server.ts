@@ -9,7 +9,7 @@ import { buildAgentWithVS } from "./agent/exported-agent.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// 1) Гарантируем Vector Store: берём из ENV, иначе создаём новый
+
 async function ensureVectorStoreId(): Promise<string> {
   const provided = process.env.VECTOR_STORE_ID?.trim();
   if (provided) {
@@ -43,7 +43,7 @@ async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
   return file.id;
 }
 
-// Совет: создайте VS один раз при старте сервиса
+
 let VS_ID_PROMISE = ensureVectorStoreId();
 
 app.post("/run", async (req, res) => {
@@ -58,7 +58,7 @@ app.post("/run", async (req, res) => {
       ? file_ids
       : (typeof file_ids === "string" && file_ids ? [file_ids] : []);
 
-    // 2) Загружаем все Telegram-URL в OpenAI
+    
     const uploadedIds: string[] = [];
     for (const url of fileUrls) {
       if (typeof url !== "string" || !/^https?:\/\//i.test(url)) continue; // защита от мусора
@@ -68,7 +68,7 @@ app.post("/run", async (req, res) => {
 
     const allFileIds: string[] = [...openAiIds, ...uploadedIds];
     const vsId = await VS_ID_PROMISE;
-    // 3) докладываем каждый файл в постоянный VS (для file_search)
+    
     if (allFileIds.length) {
   await Promise.all(
     allFileIds.map(async (fid) => {
@@ -82,7 +82,7 @@ app.post("/run", async (req, res) => {
   );
 }
 
-    // 4) формируем input: текст + файлы (для доступа код-интерпретеру)
+    
     type ContentItem =
       | { type: "input_text"; text: string }
       | { type: "input_file"; file: { id: string } };
@@ -92,15 +92,13 @@ app.post("/run", async (req, res) => {
       ...allFileIds.map((id): ContentItem => ({ type: "input_file", file: { id } })),
     ];
 
-    // 5) создаём агента, знающего про наш VS
+    
     const agent = buildAgentWithVS(vsId);
 
-    // 6) запускаем
+    
     const out = await runner.run(agent, [{ role: "user" as const, content }]);
 
-    // (опционально) верните плоский текст
-    // const plain = (out as any)?.output_text ?? JSON.stringify(out);
-    // res.json({ text: plain });
+    
 
     res.json(out);
   } 
