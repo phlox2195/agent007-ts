@@ -5,6 +5,12 @@ import {
   webSearchTool,
 } from "@openai/agents";
 
+export default function agentFromEnv() {
+  const vsId = process.env.VECTOR_STORE_ID;
+  if (!vsId) throw new Error("VECTOR_STORE_ID is not set");
+  return buildAgentWithVS(vsId);
+}
+
 export function buildAgentWithVS(vsId: string) {
   const fileSearch = fileSearchTool([vsId]); 
   const codeInterpreter = codeInterpreterTool({
@@ -152,8 +158,3 @@ export function buildAgentWithVS(vsId: string) {
   });
 }
 
-export default function agentFromEnv() {
-  const vsId = process.env.VECTOR_STORE_ID;
-  if (!vsId) throw new Error("VECTOR_STORE_ID is not set");
-  return buildAgentWithVS(vsId);
-}
