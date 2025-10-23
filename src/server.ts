@@ -1,4 +1,3 @@
-// src/server.ts
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -8,7 +7,6 @@ import { Runner } from "@openai/agents";
 import { buildAgentWithVS } from "./agent/exported-agent.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
 
 async function ensureVectorStoreId(): Promise<string> {
   const provided = process.env.VECTOR_STORE_ID?.trim();
@@ -43,63 +41,47 @@ async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
   return file.id;
 }
 
-
 let VS_ID_PROMISE = ensureVectorStoreId();
 
 app.post("/run", async (req, res) => {
   try {
     const { text = "", file_urls, file_ids } = req.body as any;
-
     const fileUrls: string[] = Array.isArray(file_urls)
       ? file_urls
       : (typeof file_urls === "string" && file_urls ? [file_urls] : []);
-
     const openAiIds: string[] = Array.isArray(file_ids)
       ? file_ids
       : (typeof file_ids === "string" && file_ids ? [file_ids] : []);
-
-    
     const uploadedIds: string[] = [];
     for (const url of fileUrls) {
       if (typeof url !== "string" || !/^https?:\/\//i.test(url)) continue; // защита от мусора
       const fid = await uploadToOpenAIFromUrl(url);
       uploadedIds.push(fid);
     }
-
     const allFileIds: string[] = [...openAiIds, ...uploadedIds];
     const vsId = await VS_ID_PROMISE;
-    
     if (allFileIds.length) {
-  await Promise.all(
-    allFileIds.map(async (fid) => {
-      try {
-        await client.vectorStores.files.createAndPoll(vsId, { file_id: fid });
-      } catch (e: any) {
-        const msg = String(e?.message ?? "");
-        if (e?.status !== 409 && !/already exists/i.test(msg)) throw e;
-      }
-    })
-  );
-}
-
-    
+      await Promise.all(
+        allFileIds.map(async (fid) => {
+          try {
+            await client.vectorStores.files.createAndPoll(vsId, { file_id: fid });
+          } 
+          catch (e: any) {
+            const msg = String(e?.message ?? "");
+            if (e?.status !== 409 && !/already exists/i.test(msg)) throw e;
+          }
+        })
+      );
+    }    
     type ContentItem =
       | { type: "input_text"; text: string }
       | { type: "input_file"; file: { id: string } };
-
     const content: ContentItem[] = [
       { type: "input_text", text },
       ...allFileIds.map((id): ContentItem => ({ type: "input_file", file: { id } })),
     ];
-
-    
     const agent = buildAgentWithVS(vsId);
-
-    
     const out = await runner.run(agent, [{ role: "user" as const, content }]);
-
-    
-
     res.json(out);
   } 
   catch (err: any) {
