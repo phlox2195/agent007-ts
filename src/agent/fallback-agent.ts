@@ -23,7 +23,7 @@ export default {
     const resp = await client.responses.create({
       model: "gpt-5",
       input: messages as any,
-      // ВАЖНО: корректные типы tools для текущего SDK
+      
       tools: [
         {
           type: "web_search_preview",
@@ -38,7 +38,7 @@ export default {
       metadata: { conversation_id }
     });
 
-    // Берём нормализованный текст
+    
     const text =
       (resp as any).output_text ??
       "";
