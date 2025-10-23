@@ -13,6 +13,7 @@ export function buildAgentWithVS(vsId: string) {
   const webSearchPreview = webSearchTool({
     searchContextSize: "medium",
     userLocation: { type: "approximate" },
+    domains: ["zakupki.gov.ru"],
   });
 
   return new Agent({
