@@ -28,7 +28,7 @@ const runner = new Runner();
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
-async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
+async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.md") {
   const tmp = path.join("/tmp", `${Date.now()}_${path.basename(filenameHint)}`);
   const resp = await axios.get(url, { responseType: "stream", timeout: 60_000 });
   await new Promise<void>((resolve, reject) => {
@@ -73,12 +73,9 @@ app.post("/run", async (req, res) => {
         })
       );
     }    
-    type ContentItem =
-      | { type: "input_text"; text: string }
-      | { type: "input_file"; file: { id: string } };
+    type ContentItem = { type: "input_text"; text: string };
     const content: ContentItem[] = [
       { type: "input_text", text },
-      ...allFileIds.map((id): ContentItem => ({ type: "input_file", file: { id } })),
     ];
     const agent = buildAgentWithVS(vsId);
     const out = await runner.run(agent, [{ role: "user" as const, content }]);
