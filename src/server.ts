@@ -28,7 +28,7 @@ const runner = new Runner();
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
-async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.pdf") {
+async function uploadToOpenAIFromUrl(url: string, filenameHint = "file.md") {
   const tmp = path.join("/tmp", `${Date.now()}_${path.basename(filenameHint)}`);
   const resp = await axios.get(url, { responseType: "stream", timeout: 60_000 });
   await new Promise<void>((resolve, reject) => {
