@@ -1,7 +1,6 @@
 import {
   Agent,
   fileSearchTool,
-  codeInterpreterTool,
   webSearchTool,
 } from "@openai/agents";
 
@@ -13,9 +12,6 @@ export default function agentFromEnv() {
 
 export function buildAgentWithVS(vsId: string) {
   const fileSearch = fileSearchTool([vsId]); 
-  const codeInterpreter = codeInterpreterTool({
-    container: { type: "auto", file_ids: [] }, 
-  });
   const webSearchPreview = webSearchTool({
     searchContextSize: "medium",
     userLocation: { type: "approximate" },
@@ -24,7 +20,7 @@ export function buildAgentWithVS(vsId: string) {
   return new Agent({
     name: "agent007",
     model: "gpt-5",
-    tools: [fileSearch, webSearchPreview, codeInterpreter],
+    tools: [fileSearch, webSearchPreview],
     modelSettings: {
       reasoning: { effort: "low" },
       store: true,
