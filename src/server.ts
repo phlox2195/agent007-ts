@@ -45,10 +45,11 @@ let VS_ID_PROMISE = ensureVectorStoreId();
 
 app.post("/run", async (req, res) => {
   try {
-    const { text = "", file_urls, file_ids } = req.body as any;
-    const fileUrls: string[] = Array.isArray(file_urls)
-      ? file_urls
-      : (typeof file_urls === "string" && file_urls ? [file_urls] : []);
+    const { text = "" } = req.body ?? {};
+    const rawUrls = req.body?.urls ?? req.body?.file_urls;
+    const fileUrls: string[] = Array.isArray(rawUrls)
+      ? rawUrls
+      : (typeof rawUrls === "string" && rawUrls ? [rawUrls] : []);
     const openAiIds: string[] = Array.isArray(file_ids)
       ? file_ids
       : (typeof file_ids === "string" && file_ids ? [file_ids] : []);
