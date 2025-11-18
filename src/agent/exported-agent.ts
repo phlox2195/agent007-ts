@@ -57,5 +57,5 @@ export function buildAgentWithVS(vsId: string) {
 - Ответ формируется только на основе загруженных файлов`
   });
 }
-}
+
 
