@@ -6,7 +6,10 @@ import { OpenAI } from "openai";
 import { Runner } from "@openai/agents";
 import { buildAgentWithVS } from "./agent/exported-agent.js";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  timeout: 600_000, // 10 минут
+});
 
 async function ensureVectorStoreId(): Promise<string> {
   const provided = process.env.VECTOR_STORE_ID?.trim();
