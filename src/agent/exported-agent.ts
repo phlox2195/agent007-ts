@@ -24,7 +24,10 @@ export function buildAgentWithVS(vsId: string) {
     model: "gpt-5",
 
     
-    promptId: "pmpt_68ecba2f94b0819396c6f621781d60d60b58dc2d2b34cef4",
+    "prompt": {
+    "id": "pmpt_68ecba2f94b0819396c6f621781d60d60b58dc2d2b34cef4",
+    "version": "6"
+  },
 
     tools: [fileSearch, webSearchPreview],
 
