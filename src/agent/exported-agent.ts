@@ -1,39 +1,50 @@
-import {
-  Agent,
-  fileSearchTool,
-  webSearchTool,
-} from "@openai/agents";
+import OpenAI from "openai";
 
-export default function agentFromEnv() {
-  const vsId = process.env.VECTOR_STORE_ID;
-  if (!vsId) throw new Error("VECTOR_STORE_ID is not set");
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-  return buildAgentWithVS(vsId);
-}
-
-export function buildAgentWithVS(vsId: string) {
-  const fileSearch = fileSearchTool([vsId]);
-
-  const webSearchPreview = webSearchTool({
-    searchContextSize: "medium",
-    userLocation: { type: "approximate" },
-  });
-
-  return new Agent({
-    name: "agent007",
-    model: "gpt-5",
-
-    
-    "prompt": {
+const response = await openai.responses.create({
+  prompt: {
     "id": "pmpt_68ecba2f94b0819396c6f621781d60d60b58dc2d2b34cef4",
     "version": "6"
   },
-
-    tools: [fileSearch, webSearchPreview],
-
-    modelSettings: {
-      reasoning: { effort: "low" },
-      store: true,
+  input: [],
+  reasoning: {},
+  tools: [
+    {
+      "type": "file_search",
+      "vector_store_ids": [
+        "vs_68f76e4a720481918197a0e124b859b8"
+      ]
     },
-  });
-}
+    {
+      "type": "web_search",
+      "filters": {
+        "allowed_domains": [
+          "zakupki.gov.ru"
+        ]
+      },
+      "search_context_size": "medium",
+      "user_location": {
+        "type": "approximate",
+        "city": null,
+        "country": null,
+        "region": null,
+        "timezone": null
+      }
+    },
+    {
+      "type": "code_interpreter",
+      "container": {
+        "type": "auto"
+      }
+    }
+  ],
+  store: true,
+  include: [
+    "code_interpreter_call.outputs",
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources"
+  ]
+});
